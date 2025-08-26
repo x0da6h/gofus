@@ -149,7 +149,7 @@ func isFilteredLength(length int) bool {
 }
 
 func main() {
-	fmt.Printf("%s【扫描配置】%s\n", green, reset)
+	fmt.Printf("%s\n------------------------------【扫描配置】------------------------------%s\n", yellow, reset)
 	fmt.Printf("  目标URL    : %s\n", targetURL)
 	fmt.Printf("  字典文件   : %s\n", dictPath)
 	fmt.Printf("  并发数量   : %d\n", concurrent)
@@ -172,7 +172,7 @@ func main() {
 	scanPath(targetURL, words, semaphore, 1)
 	wg.Wait()
 
-	fmt.Printf("%s\n【扫描结束】%s\n", green, reset)
+	fmt.Printf("%s------------------------------【扫描结束】------------------------------%s\n", yellow, reset)
 }
 
 func readDictionary(path string) ([]string, error) {
@@ -239,15 +239,35 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 			resp.StatusCode, fullPath, depth, contentLength)
 	}
 
-	if depth < maxDepth &&
-		(resp.StatusCode == http.StatusOK ||
-			resp.StatusCode == http.StatusMovedPermanently ||
-			resp.StatusCode == http.StatusFound) &&
-		strings.HasSuffix(word, "/") {
+	if depth < maxDepth {
+		shouldDescend := false
+		nextBase := fullPath
 
-		if !strings.HasSuffix(fullPath, "/") {
-			fullPath += "/"
+		// 情况1：字典词以'/'结尾，通常表示目录
+		if strings.HasSuffix(word, "/") {
+			shouldDescend = resp.StatusCode == http.StatusOK ||
+				resp.StatusCode == http.StatusMovedPermanently ||
+				resp.StatusCode == http.StatusFound ||
+				resp.StatusCode == http.StatusTemporaryRedirect ||
+				resp.StatusCode == http.StatusPermanentRedirect
+		} else {
+			// 情况2：未以'/'结尾，但返回了重定向（常见：/a -> /a/）
+			if resp.StatusCode == http.StatusMovedPermanently ||
+				resp.StatusCode == http.StatusFound ||
+				resp.StatusCode == http.StatusTemporaryRedirect ||
+				resp.StatusCode == http.StatusPermanentRedirect {
+				shouldDescend = true
+				if !strings.HasSuffix(nextBase, "/") {
+					nextBase += "/"
+				}
+			}
 		}
-		scanPath(fullPath, words, semaphore, depth+1)
+
+		if shouldDescend {
+			if !strings.HasSuffix(nextBase, "/") {
+				nextBase += "/"
+			}
+			scanPath(nextBase, words, semaphore, depth+1)
+		}
 	}
 }
