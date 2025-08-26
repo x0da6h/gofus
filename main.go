@@ -98,8 +98,8 @@ func init() {
 
 	// 5. 检查必填参数（非-h场景）
 	if dictPath == "" || targetURL == "" {
-		fmt.Printf("%s【错误】必须指定 -u（目标URL）和 -w（字典文件）！%s\n", green, reset)
-		fmt.Println("提示：执行 .\\gofus.exe -h 查看完整使用说明\n")
+		fmt.Printf("%s\n【ERROR】缺少必需参数 -u (目标URL) 和 -w (字典文件)%s\n", green, reset)
+		fmt.Println("提示：执行 gofus -h 查看完整使用说明\n")
 		os.Exit(1)
 	}
 
