@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,71 +15,122 @@ import (
 var (
 	dictPath  string
 	targetURL string
-	client    = &http.Client{
-		Timeout: 10 * time.Second,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse // 不跟随重定向，以便查看301/302状态
-		},
-	}
-	visited = struct {
+	client    *http.Client
+	visited   = struct {
 		sync.RWMutex
 		m map[string]bool
 	}{m: make(map[string]bool)}
-	wg         sync.WaitGroup
-	concurrent int
+	wg            sync.WaitGroup
+	concurrent    int
+	maxDepth      int   // 最大递归深度
+	filterCodes   []int // 需要过滤的状态码
+	filterLengths []int // 需要过滤的响应体长度
 )
 
 func init() {
-	// 解析命令行参数
+	// 添加命令行参数
 	flag.StringVar(&dictPath, "w", "", "路径字典文件")
 	flag.StringVar(&targetURL, "u", "", "目标URL地址")
 	flag.IntVar(&concurrent, "c", 10, "并发数量")
+	flag.IntVar(&maxDepth, "d", 3, "最大递归深度")
+	flag.StringVar(&filterCodeStr, "fc", "", "需要过滤的状态码，用逗号分隔 (例如: 404,403)")
+	flag.StringVar(&filterLengthStr, "fl", "", "需要过滤的响应体长度，用逗号分隔 (例如: 1000,2000)")
 	flag.Parse()
 
-	// 验证参数
 	if dictPath == "" || targetURL == "" {
 		fmt.Println("必须指定字典文件(-w)和目标URL(-u)")
 		flag.Usage()
 		os.Exit(1)
 	}
 
-	// 确保URL格式正确
+	// 解析过滤状态码
+	filterCodes = parseFilterNumbers(filterCodeStr)
+	// 解析过滤长度
+	filterLengths = parseFilterNumbers(filterLengthStr)
+
+	// 初始化HTTP客户端
+	client = &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+
+	// 处理URL格式
 	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
 		targetURL = "http://" + targetURL
 	}
 
-	// 确保URL以/结尾，方便路径拼接
 	if !strings.HasSuffix(targetURL, "/") {
 		targetURL += "/"
 	}
 }
 
+// 解析过滤参数为整数切片
+func parseFilterNumbers(filterStr string) []int {
+	var result []int
+	if filterStr == "" {
+		return result
+	}
+
+	parts := strings.Split(filterStr, ",")
+	for _, part := range parts {
+		num, err := strconv.Atoi(strings.TrimSpace(part))
+		if err == nil {
+			result = append(result, num)
+		}
+	}
+	return result
+}
+
+// 检查状态码是否需要被过滤
+func isFilteredCode(code int) bool {
+	for _, c := range filterCodes {
+		if code == c {
+			return true
+		}
+	}
+	return false
+}
+
+// 检查响应长度是否需要被过滤
+func isFilteredLength(length int) bool {
+	for _, l := range filterLengths {
+		if length == l {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	fmt.Printf("开始扫描目标: %s\n", targetURL)
 	fmt.Printf("使用字典: %s\n", dictPath)
-	fmt.Printf("并发数量: %d\n\n", concurrent)
+	fmt.Printf("并发数量: %d\n", concurrent)
+	fmt.Printf("最大递归深度: %d\n", maxDepth)
 
-	// 读取字典文件
+	if len(filterCodes) > 0 {
+		fmt.Printf("过滤状态码: %v\n", filterCodes)
+	}
+	if len(filterLengths) > 0 {
+		fmt.Printf("过滤响应长度: %v\n", filterLengths)
+	}
+
 	words, err := readDictionary(dictPath)
 	if err != nil {
-		fmt.Printf("读取字典失败: %v\n", err)
+		fmt.Printf("读取字典失败: %v\n", err) // 字典读取失败属于致命错误，仍需提示
 		os.Exit(1)
 	}
 
-	fmt.Printf("从字典中加载了 %d 个路径\n", len(words))
+	fmt.Printf("从字典中加载了 %d 个路径\n\n", len(words))
 
-	// 创建信号量控制并发
+	// 初始深度为1
 	semaphore := make(chan struct{}, concurrent)
-
-	// 开始扫描根路径
-	scanPath(targetURL, words, semaphore)
-
-	// 等待所有扫描完成
+	scanPath(targetURL, words, semaphore, 1)
 	wg.Wait()
 	fmt.Println("\n扫描完成")
 }
 
-// 读取字典文件内容
 func readDictionary(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -90,7 +142,7 @@ func readDictionary(path string) ([]string, error) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		word := strings.TrimSpace(scanner.Text())
-		if word != "" && !strings.HasPrefix(word, "#") { // 忽略空行和注释行
+		if word != "" && !strings.HasPrefix(word, "#") {
 			words = append(words, word)
 		}
 	}
@@ -98,8 +150,7 @@ func readDictionary(path string) ([]string, error) {
 	return words, scanner.Err()
 }
 
-// 扫描指定路径下的所有可能路径
-func scanPath(basePath string, words []string, semaphore chan struct{}) {
+func scanPath(basePath string, words []string, semaphore chan struct{}, depth int) {
 	visited.Lock()
 	if visited.m[basePath] {
 		visited.Unlock()
@@ -108,43 +159,65 @@ func scanPath(basePath string, words []string, semaphore chan struct{}) {
 	visited.m[basePath] = true
 	visited.Unlock()
 
+	// 如果当前深度超过最大深度则停止
+	if depth > maxDepth {
+		return
+	}
+
 	for _, word := range words {
 		wg.Add(1)
-		semaphore <- struct{}{} // 获取信号量
+		semaphore <- struct{}{}
 
-		go func(word string) {
+		// 传递当前深度到下一级
+		go func(word string, currentDepth int) {
 			defer wg.Done()
-			defer func() { <-semaphore }() // 释放信号量
-			testPath(basePath, word, words, semaphore)
-		}(word)
+			defer func() { <-semaphore }()
+			testPath(basePath, word, words, semaphore, currentDepth)
+		}(word, depth)
 	}
 }
 
-// 测试单个路径是否存在
-func testPath(basePath, word string, words []string, semaphore chan struct{}) {
+func testPath(basePath, word string, words []string, semaphore chan struct{}, depth int) {
 	fullPath := basePath + word
-	resp, err := client.Head(fullPath)
+	resp, err := client.Get(fullPath) // 使用Get方法以便获取响应体长度
 	if err != nil {
-		// 忽略连接错误，可能是网络问题或服务器拒绝连接
+		// 移除错误信息打印，发生错误时直接返回
 		return
 	}
 	defer resp.Body.Close()
 
-	// 打印找到的有效路径和状态码
-	if resp.StatusCode != http.StatusNotFound {
-		fmt.Printf("[%d] %s\n", resp.StatusCode, fullPath)
+	// 获取响应体长度
+	contentLength := int(resp.ContentLength)
+
+	// 检查是否需要过滤
+	if isFilteredCode(resp.StatusCode) {
+		return
+	}
+	if isFilteredLength(contentLength) {
+		return
 	}
 
-	// 如果是目录或重定向，进行递归扫描
-	if (resp.StatusCode == http.StatusOK ||
-		resp.StatusCode == http.StatusMovedPermanently ||
-		resp.StatusCode == http.StatusFound) &&
+	// 输出结果，包含响应体长度
+	fmt.Printf("[%d] %s (深度: %d, 长度: %d)\n",
+		resp.StatusCode, fullPath, depth, contentLength)
+
+	// 只有当深度小于最大深度时才继续递归
+	if depth < maxDepth &&
+		(resp.StatusCode == http.StatusOK ||
+			resp.StatusCode == http.StatusMovedPermanently ||
+			resp.StatusCode == http.StatusFound) &&
 		strings.HasSuffix(word, "/") {
 
-		// 确保路径以/结尾
 		if !strings.HasSuffix(fullPath, "/") {
 			fullPath += "/"
 		}
-		scanPath(fullPath, words, semaphore)
+		// 递归时深度+1
+		scanPath(fullPath, words, semaphore, depth+1)
 	}
 }
+
+// 新增全局变量用于接收命令行参数
+var (
+	filterCodeStr   string
+	filterLengthStr string
+)
