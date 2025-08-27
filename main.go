@@ -160,6 +160,7 @@ func isFilteredLength(length int) bool {
 }
 
 func main() {
+	logo()
 	fmt.Printf("\n--------------------------------------------------\n")
 	fmt.Printf("  #目标URL    : %s\n", targetURL)
 	fmt.Printf("  #字典文件   : %s\n", dictPath)
