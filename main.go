@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net/http"
@@ -101,9 +102,18 @@ func init() {
 	filterLengths = parseFilterNumbers(filterLengthStr)
 
 	client = &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: 30 * time.Second, // 增加超时时间到30秒
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
+		},
+		Transport: &http.Transport{
+			TLSHandshakeTimeout:   15 * time.Second, // TLS握手超时
+			ResponseHeaderTimeout: 10 * time.Second, // 响应头超时
+			ExpectContinueTimeout: 5 * time.Second,  // Expect-Continue超时
+			IdleConnTimeout:       30 * time.Second, // 空闲连接超时
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true, // 跳过TLS证书验证
+			},
 		},
 	}
 
@@ -149,30 +159,30 @@ func isFilteredLength(length int) bool {
 }
 
 func main() {
-	fmt.Printf("%s\n------------------------------【扫描配置】------------------------------%s\n", yellow, reset)
-	fmt.Printf("  目标URL    : %s\n", targetURL)
-	fmt.Printf("  字典文件   : %s\n", dictPath)
-	fmt.Printf("  并发数量   : %d\n", concurrent)
-	fmt.Printf("  最大深度   : %d\n", maxDepth)
+	fmt.Printf("\n--------------------------------------------------\n")
+	fmt.Printf("  #目标URL    : %s\n", targetURL)
+	fmt.Printf("  #字典文件   : %s\n", dictPath)
+	fmt.Printf("  #并发数量   : %d\n", concurrent)
+	fmt.Printf("  #最大深度   : %d\n", maxDepth)
 	if len(filterCodes) > 0 {
-		fmt.Printf("  过滤状态码 : %v\n", filterCodes)
+		fmt.Printf("  #过滤状态码 : %v\n", filterCodes)
 	}
 	if len(filterLengths) > 0 {
-		fmt.Printf("  过滤长度   : %v\n", filterLengths)
+		fmt.Printf("  #过滤长度   : %v\n", filterLengths)
 	}
-
 	words, err := readDictionary(dictPath)
 	if err != nil {
 		fmt.Printf("%s【错误】读取字典失败: %v%s\n", green, err, reset)
 		os.Exit(1)
 	}
-	fmt.Printf("\n【字典加载完成】共加载 %d 个有效路径\n\n", len(words))
+	fmt.Printf("  #字典加载   : %d\n", len(words))
+	fmt.Printf("--------------------------------------------------\n\n")
 
 	semaphore := make(chan struct{}, concurrent)
 	scanPath(targetURL, words, semaphore, 1)
 	wg.Wait()
 
-	fmt.Printf("%s------------------------------【扫描结束】------------------------------%s\n", yellow, reset)
+	fmt.Printf("-------------------------【扫描结束】-------------------------\n\n")
 }
 
 func readDictionary(path string) ([]string, error) {
@@ -218,8 +228,17 @@ func scanPath(basePath string, words []string, semaphore chan struct{}, depth in
 
 func testPath(basePath, word string, words []string, semaphore chan struct{}, depth int) {
 	fullPath := basePath + word
+
 	resp, err := client.Get(fullPath)
 	if err != nil {
+		// 增加错误日志，帮助调试HTTPS连接问题
+		if strings.Contains(err.Error(), "timeout") {
+			fmt.Printf("%s[超时] %s%s\n", red, fullPath, reset)
+		} else if strings.Contains(err.Error(), "tls") {
+			fmt.Printf("%s[TLS错误] %s: %v%s\n", red, fullPath, err, reset)
+		} else if strings.Contains(err.Error(), "connection refused") {
+			fmt.Printf("%s[连接拒绝] %s%s\n", red, fullPath, reset)
+		}
 		return
 	}
 	defer resp.Body.Close()
