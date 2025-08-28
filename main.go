@@ -237,18 +237,18 @@ func main() {
 
 	// 准备配置信息
 	configLines := []string{
-		fmt.Sprintf(" #目标URL    : %s", targetURL),
-		fmt.Sprintf(" #字典文件   : %s", dictPath),
-		fmt.Sprintf(" #并发数量   : %d", concurrent),
-		fmt.Sprintf(" #最大深度   : %d", maxDepth),
+		fmt.Sprintf("#目标URL    : %s", targetURL),
+		fmt.Sprintf("#字典文件   : %s", dictPath),
+		fmt.Sprintf("#并发数量   : %d", concurrent),
+		fmt.Sprintf("#最大深度   : %d", maxDepth),
 	}
 
 	// 添加可选的过滤信息
 	if len(filterCodes) > 0 {
-		configLines = append(configLines, fmt.Sprintf(" #过滤状态码 : %v", filterCodes))
+		configLines = append(configLines, fmt.Sprintf("#过滤状态码 : %v", filterCodes))
 	}
 	if len(filterLengths) > 0 {
-		configLines = append(configLines, fmt.Sprintf(" #过滤长度   : %v", filterLengths))
+		configLines = append(configLines, fmt.Sprintf("#过滤长度   : %v", filterLengths))
 	}
 
 	// 读取字典并添加加载信息
@@ -262,7 +262,7 @@ func main() {
 	totalWords = len(words)
 
 	// 添加字典加载信息
-	configLines = append(configLines, fmt.Sprintf(" #字典加载   : %d", len(words)))
+	configLines = append(configLines, fmt.Sprintf("#字典加载   : %d", len(words)))
 
 	// 打印格式化的配置框
 	printConfigBox(configLines)
