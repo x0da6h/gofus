@@ -79,6 +79,53 @@ func logo() {
 	fmt.Print(gofusLogo)
 }
 
+// 新增：打印配置信息框（根据内容自动调整宽度）
+func printConfigBox(lines []string) {
+	// 计算最大内容宽度（考虑中文字符的显示宽度）
+	maxWidth := 0
+	for _, line := range lines {
+		// 计算实际显示宽度（中文字符占两个位置）
+		displayWidth := 0
+		for _, r := range []rune(line) {
+			if r > 127 { // 非 ASCII 字符（中文等）占两个位置
+				displayWidth += 2
+			} else {
+				displayWidth += 1
+			}
+		}
+		if displayWidth > maxWidth {
+			maxWidth = displayWidth
+		}
+	}
+
+	// 确保最小宽度
+	if maxWidth < 30 {
+		maxWidth = 30
+	}
+
+	// 生成上边框
+	borderTop := "*" + strings.Repeat("-", maxWidth+2) + "*"
+	borderBottom := "*" + strings.Repeat("-", maxWidth+2) + "*"
+
+	// 打印边框和内容
+	fmt.Println(borderTop)
+	for _, line := range lines {
+		// 计算当前行的显示宽度
+		currentWidth := 0
+		for _, r := range []rune(line) {
+			if r > 127 { // 非 ASCII 字符（中文等）占两个位置
+				currentWidth += 2
+			} else {
+				currentWidth += 1
+			}
+		}
+		// 计算需要填充的空格数
+		padding := maxWidth - currentWidth
+		fmt.Printf("| %s%s |\n", line, strings.Repeat(" ", padding))
+	}
+	fmt.Println(borderBottom)
+}
+
 func printHelp() {
 	logo()
 	params := []struct {
@@ -96,7 +143,7 @@ func printHelp() {
 	}
 
 	// 打印参数列表
-	fmt.Println("------------------------------【参数说明】------------------------------\n")
+	fmt.Println("\n选项说明:")
 	for _, p := range params {
 		fmt.Printf("  %-6s  默认值: %-8s  %s\n", p.flag, p.defaultVal, p.desc)
 	}
@@ -187,28 +234,38 @@ func isFilteredLength(length int) bool {
 
 func main() {
 	logo()
-	fmt.Printf("--------------------------------------------------\n")
-	fmt.Printf("  #目标URL    : %s\n", targetURL)
-	fmt.Printf("  #字典文件   : %s\n", dictPath)
-	fmt.Printf("  #并发数量   : %d\n", concurrent)
-	fmt.Printf("  #最大深度   : %d\n", maxDepth)
+
+	// 准备配置信息
+	configLines := []string{
+		fmt.Sprintf(" #目标URL    : %s", targetURL),
+		fmt.Sprintf(" #字典文件   : %s", dictPath),
+		fmt.Sprintf(" #并发数量   : %d", concurrent),
+		fmt.Sprintf(" #最大深度   : %d", maxDepth),
+	}
+
+	// 添加可选的过滤信息
 	if len(filterCodes) > 0 {
-		fmt.Printf("  #过滤状态码 : %v\n", filterCodes)
+		configLines = append(configLines, fmt.Sprintf(" #过滤状态码 : %v", filterCodes))
 	}
 	if len(filterLengths) > 0 {
-		fmt.Printf("  #过滤长度   : %v\n", filterLengths)
+		configLines = append(configLines, fmt.Sprintf(" #过滤长度   : %v", filterLengths))
 	}
+
+	// 读取字典并添加加载信息
 	words, err := readDictionary(dictPath)
 	if err != nil {
-		fmt.Printf("%s【错误】读取字典失败: %v%s\n", green, err, reset)
+		fmt.Printf("%s【错误】读取字典失败: %v%s\n", red, err, reset)
 		os.Exit(1)
 	}
 
 	// 设置总字典条数
 	totalWords = len(words)
 
-	fmt.Printf("  #字典加载   : %d\n", len(words))
-	fmt.Printf("--------------------------------------------------")
+	// 添加字典加载信息
+	configLines = append(configLines, fmt.Sprintf(" #字典加载   : %d", len(words)))
+
+	// 打印格式化的配置框
+	printConfigBox(configLines)
 
 	// 初始化输出队列
 	outputQueue = make(chan string, 100) // 缓冲100个消息
