@@ -448,13 +448,13 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 
 	// 只在未被过滤时才输出结果
 	if !isFilteredCode(resp.StatusCode) && !isFilteredLength(contentLength) {
-		// 根据状态码和是否可递归选择颜色输出
+		// 根据状态码选择颜色输出
 		if resp.StatusCode == http.StatusOK {
 			// 200状态码：绿色
 			printResult(fmt.Sprintf("[%s%d%s] %s (深度: %d, 长度: %d)",
 				green, resp.StatusCode, reset, fullPath, depth, contentLength))
-		} else if resp.StatusCode == http.StatusMovedPermanently || canDescend {
-			// 301状态码或可递归目录：蓝色
+		} else if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
+			// 301和302状态码：蓝色
 			printResult(fmt.Sprintf("[%s%d%s] %s (深度: %d, 长度: %d)",
 				blue, resp.StatusCode, reset, fullPath, depth, contentLength))
 		} else {
