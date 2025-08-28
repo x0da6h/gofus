@@ -300,9 +300,10 @@ func main() {
 	// 禁用进度条
 	statusBarActive = false
 
-	// 移动到进度条位置并清除
+	// 彻底清除进度条
 	fmt.Print("\033[1000;1H") // 移动到最后一行
-	fmt.Print("\033[K")       // 清除进度条
+	fmt.Print("\033[2K")      // 清除整行
+	fmt.Print("\033[1G")      // 移动到行首
 	fmt.Print("\n")           // 换行，确保光标在新行
 
 	// 扫描完成后显示最终统计
@@ -587,15 +588,14 @@ func updateStatusBar() {
 	errors := atomic.LoadInt64(&errorCount)
 	rate := atomic.LoadInt64(&requestRate)
 
-	// 保存当前光标位置
-	fmt.Print("\033[s")
+	// 更精确的光标控制，防止输出泄露
+	fmt.Print("\033[s")       // 保存当前光标位置
+	fmt.Print("\033[1000;1H") // 移动到屏幕最后一行
+	fmt.Print("\033[2K")      // 清除整行（包括行首和行尾）
+	fmt.Print("\033[1G")      // 移动到行首
 
-	// 移动到屏幕最后一行（进度条固定位置）
-	fmt.Print("\033[1000;1H") // 移动到大数行数，系统会自动限制在最后一行
-
-	// 清除当前行并输出进度信息
-	fmt.Print("\033[K") // 清除从光标到行尾的内容
-	fmt.Printf("%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s",
+	// 输出进度信息，确保格式完整
+	progressLine := fmt.Sprintf("%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s",
 		green,
 		float64(scanned)/float64(totalWords)*100,
 		formatRate(rate),
@@ -603,8 +603,8 @@ func updateStatusBar() {
 		errors,
 		reset)
 
-	// 恢复光标位置
-	fmt.Print("\033[u")
+	fmt.Print(progressLine)
+	fmt.Print("\033[u") // 恢复光标位置
 }
 
 // 新增：格式化百分比
