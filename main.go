@@ -356,7 +356,19 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 
 	fullPath := basePath + word
 
-	resp, err := client.Get(fullPath)
+	// 创建自定义HTTP请求，设置User-Agent
+	req, err := http.NewRequest("GET", fullPath, nil)
+	if err != nil {
+		// 增加错误计数
+		atomic.AddInt64(&errorCount, 1)
+		printResult(fmt.Sprintf("%s[请求错误] %s: %v%s", red, fullPath, err, reset))
+		return
+	}
+
+	// 设置User-Agent为gofus
+	req.Header.Set("User-Agent", "gofus/1.0")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		// 增加错误计数
 		atomic.AddInt64(&errorCount, 1)
