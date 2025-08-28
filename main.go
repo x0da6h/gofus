@@ -461,14 +461,14 @@ func startOutputProcessor() {
 				if message == "" {
 					return // 空消息表示结束
 				}
-				// 保护进度条不被结果输出干扰
+				// 安全的结果输出：临时清除进度条→输出结果→让进度条自然恢复
 				outputMutex.Lock()
-				// 保存光标位置 → 清除进度条 → 输出结果 → 恢复进度条
-				fmt.Print("\033[s")         // 保存光标位置
-				fmt.Print("\033[A")         // 上移到进度条位置
-				fmt.Print("\033[K")         // 清除进度条
-				fmt.Printf("%s\n", message) // 输出结果
-				fmt.Print("\033[u")         // 恢复光标位置
+				if statusBarActive {
+					// 清除当前进度条
+					fmt.Fprint(os.Stderr, "\r\033[K")
+				}
+				// 输出结果到stdout
+				fmt.Printf("%s\n", message)
 				outputMutex.Unlock()
 			case <-outputDone:
 				return
@@ -484,14 +484,14 @@ func printResult(message string) {
 	case outputQueue <- message:
 		// 成功发送到队列
 	default:
-		// 队列满了，直接输出但要保护进度条
+		// 队列满了，直接输出
 		outputMutex.Lock()
-		// 保存光标位置 → 清除进度条 → 输出结果 → 恢复进度条
-		fmt.Print("\033[s")         // 保存光标位置
-		fmt.Print("\033[A")         // 上移到进度条位置
-		fmt.Print("\033[K")         // 清除进度条
-		fmt.Printf("%s\n", message) // 输出结果
-		fmt.Print("\033[u")         // 恢复光标位置
+		if statusBarActive {
+			// 清除当前进度条
+			fmt.Fprint(os.Stderr, "\r\033[K")
+		}
+		// 输出结果到stdout
+		fmt.Printf("%s\n", message)
 		outputMutex.Unlock()
 	}
 }
