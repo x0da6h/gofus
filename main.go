@@ -59,10 +59,6 @@ const (
 	cyan    = "\033[36m"
 	magenta = "\033[35m"
 	reset   = "\033[0m"
-
-	// 进度条字符
-	progressChar = "█"
-	emptyChar    = "░"
 )
 
 func logo() {
@@ -432,6 +428,20 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 				resp.StatusCode == http.StatusTemporaryRedirect ||
 				resp.StatusCode == http.StatusPermanentRedirect {
 				canDescend = true
+			} else if resp.StatusCode == http.StatusOK {
+				// 情况3：200状态码且没有文件后缀名，应该递归
+				// 检查是否有文件后缀名（包含点且后面有字母或数字）
+				lastSlashIndex := strings.LastIndex(word, "/")
+				filename := word
+				if lastSlashIndex >= 0 {
+					filename = word[lastSlashIndex+1:]
+				}
+				// 如果没有文件后缀名（没有点或点后面没有内容），则认为是目录
+				dotIndex := strings.LastIndex(filename, ".")
+				if dotIndex == -1 || dotIndex == len(filename)-1 {
+					// 没有点或点在最后，认为是目录
+					canDescend = true
+				}
 			}
 		}
 	}
