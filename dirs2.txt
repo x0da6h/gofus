@@ -1,3 +1,0 @@
-api
-css
-favicon.ico

@@ -284,7 +284,6 @@ func main() {
 	startStatusBarUpdater()
 
 	// 为状态栏预留空间（在底部预留1行）
-	fmt.Println()
 	fmt.Printf("\n") // 预留进度条行
 
 	semaphore := make(chan struct{}, concurrent)
@@ -406,26 +405,12 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 		contentLength = 0
 	}
 
-	if isFilteredCode(resp.StatusCode) || isFilteredLength(contentLength) {
-		return
-	}
-
-	// 使用输出互斥锁保护输出
-	if resp.StatusCode == http.StatusOK {
-		printResult(fmt.Sprintf("[%s%d%s] %s (深度: %d, 长度: %d)",
-			green, resp.StatusCode, reset, fullPath, depth, contentLength))
-	} else {
-		printResult(fmt.Sprintf("[%d] %s (深度: %d, 长度: %d)",
-			resp.StatusCode, fullPath, depth, contentLength))
-	}
-
+	// 先判断是否为可递归目录（不受过滤影响）
+	canDescend := false
 	if depth < maxDepth {
-		shouldDescend := false
-		nextBase := fullPath
-
 		// 情况1：字典词以'/'结尾，通常表示目录
 		if strings.HasSuffix(word, "/") {
-			shouldDescend = resp.StatusCode == http.StatusOK ||
+			canDescend = resp.StatusCode == http.StatusOK ||
 				resp.StatusCode == http.StatusMovedPermanently ||
 				resp.StatusCode == http.StatusFound ||
 				resp.StatusCode == http.StatusTemporaryRedirect ||
@@ -436,19 +421,36 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 				resp.StatusCode == http.StatusFound ||
 				resp.StatusCode == http.StatusTemporaryRedirect ||
 				resp.StatusCode == http.StatusPermanentRedirect {
-				shouldDescend = true
-				if !strings.HasSuffix(nextBase, "/") {
-					nextBase += "/"
-				}
+				canDescend = true
 			}
 		}
+	}
 
-		if shouldDescend {
-			if !strings.HasSuffix(nextBase, "/") {
-				nextBase += "/"
-			}
-			scanPath(nextBase, words, semaphore, depth+1)
+	// 只在未被过滤时才输出结果
+	if !isFilteredCode(resp.StatusCode) && !isFilteredLength(contentLength) {
+		// 根据状态码和是否可递归选择颜色输出
+		if resp.StatusCode == http.StatusOK {
+			// 200状态码：绿色
+			printResult(fmt.Sprintf("[%s%d%s] %s (深度: %d, 长度: %d)",
+				green, resp.StatusCode, reset, fullPath, depth, contentLength))
+		} else if resp.StatusCode == http.StatusMovedPermanently || canDescend {
+			// 301状态码或可递归目录：蓝色
+			printResult(fmt.Sprintf("[%s%d%s] %s (深度: %d, 长度: %d)",
+				blue, resp.StatusCode, reset, fullPath, depth, contentLength))
+		} else {
+			// 其他状态码：默认颜色
+			printResult(fmt.Sprintf("[%d] %s (深度: %d, 长度: %d)",
+				resp.StatusCode, fullPath, depth, contentLength))
 		}
+	}
+
+	// 递归扫描逻辑（不受过滤影响）
+	if depth < maxDepth && canDescend {
+		nextBase := fullPath
+		if !strings.HasSuffix(nextBase, "/") {
+			nextBase += "/"
+		}
+		scanPath(nextBase, words, semaphore, depth+1)
 	}
 }
 
