@@ -300,11 +300,8 @@ func main() {
 	// 禁用进度条
 	statusBarActive = false
 
-	// 彻底清除进度条
-	fmt.Print("\033[1000;1H") // 移动到最后一行
-	fmt.Print("\033[2K")      // 清除整行
-	fmt.Print("\033[1G")      // 移动到行首
-	fmt.Print("\n")           // 换行，确保光标在新行
+	// 按照项目规范清除进度条：使用fmt.Fprint(os.Stderr, "\r\033[K\n")
+	fmt.Fprint(os.Stderr, "\r\033[K\n")
 
 	// 扫描完成后显示最终统计
 	fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d%s\n", green, atomic.LoadInt64(&scannedCount), atomic.LoadInt64(&errorCount), reset)
@@ -464,7 +461,15 @@ func startOutputProcessor() {
 				if message == "" {
 					return // 空消息表示结束
 				}
-				fmt.Printf("%s\n", message)
+				// 保护进度条不被结果输出干扰
+				outputMutex.Lock()
+				// 保存光标位置 → 清除进度条 → 输出结果 → 恢复进度条
+				fmt.Print("\033[s")         // 保存光标位置
+				fmt.Print("\033[A")         // 上移到进度条位置
+				fmt.Print("\033[K")         // 清除进度条
+				fmt.Printf("%s\n", message) // 输出结果
+				fmt.Print("\033[u")         // 恢复光标位置
+				outputMutex.Unlock()
 			case <-outputDone:
 				return
 			}
@@ -472,15 +477,22 @@ func startOutputProcessor() {
 	}()
 }
 
-// 新增：打印结果（使用队列）
+// 新增：打印结果（保护进度条不被干扰）
 func printResult(message string) {
 	// 使用输出队列确保所有结果都能显示
 	select {
 	case outputQueue <- message:
 		// 成功发送到队列
 	default:
-		// 队列满了，直接输出
-		fmt.Printf("%s\n", message)
+		// 队列满了，直接输出但要保护进度条
+		outputMutex.Lock()
+		// 保存光标位置 → 清除进度条 → 输出结果 → 恢复进度条
+		fmt.Print("\033[s")         // 保存光标位置
+		fmt.Print("\033[A")         // 上移到进度条位置
+		fmt.Print("\033[K")         // 清除进度条
+		fmt.Printf("%s\n", message) // 输出结果
+		fmt.Print("\033[u")         // 恢复光标位置
+		outputMutex.Unlock()
 	}
 }
 
@@ -502,8 +514,10 @@ func setupSignalHandler() {
 		atomic.StoreInt32(&isPaused, 1)
 		statusBarActive = false
 
-		// 清除当前进度条并显示暂停信息
-		fmt.Printf("\r%s\n", strings.Repeat(" ", 80)) // 清除进度条
+		// 按照项目规范清除进度条
+		fmt.Fprint(os.Stderr, "\r\033[K\n")
+
+		// 显示暂停信息
 		fmt.Printf("%s[!] 扫描已终止 (Ctrl+C)%s\n", red, reset)
 		fmt.Printf("%s[+] 已扫描: %d/%d (%.1f%%), 错误: %d%s\n",
 			cyan, atomic.LoadInt64(&scannedCount), totalWords,
@@ -594,8 +608,8 @@ func updateStatusBar() {
 	fmt.Print("\033[2K")      // 清除整行（包括行首和行尾）
 	fmt.Print("\033[1G")      // 移动到行首
 
-	// 输出进度信息，确保格式完整
-	progressLine := fmt.Sprintf("%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s",
+	// 构建固定格式的进度信息，使用固定宽度确保数字位置稳定
+	progressLine := fmt.Sprintf("%s%6.1f%% | 速率: %6s req/sec | 已扫描: %4d/%4d | 错误: %3d%s",
 		green,
 		float64(scanned)/float64(totalWords)*100,
 		formatRate(rate),
@@ -603,6 +617,7 @@ func updateStatusBar() {
 		errors,
 		reset)
 
+	// 输出进度信息
 	fmt.Print(progressLine)
 	fmt.Print("\033[u") // 恢复光标位置
 }
