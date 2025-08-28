@@ -304,7 +304,7 @@ func main() {
 	fmt.Fprint(os.Stderr, "\r\033[K\n")
 
 	// 扫描完成后显示最终统计
-	fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d%s\n", green, atomic.LoadInt64(&scannedCount), atomic.LoadInt64(&errorCount), reset)
+	fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d 个%s\n", green, atomic.LoadInt64(&scannedCount), atomic.LoadInt64(&errorCount), reset)
 }
 
 func readDictionary(path string) ([]string, error) {
@@ -609,7 +609,7 @@ func updateStatusBar() {
 	fmt.Print("\033[1G")      // 移动到行首
 
 	// 构建固定格式的进度信息，使用固定宽度确保数字位置稳定
-	progressLine := fmt.Sprintf("%s%6.1f%% | 速率: %6s req/sec | 已扫描: %4d/%4d | 错误: %3d%s",
+	progressLine := fmt.Sprintf("%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s",
 		green,
 		float64(scanned)/float64(totalWords)*100,
 		formatRate(rate),
