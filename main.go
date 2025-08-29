@@ -37,10 +37,11 @@ func (h *headerFlags) Set(value string) error {
 }
 
 var (
-	dictPath  string
-	targetURL string
-	client    *http.Client
-	visited   = struct {
+	dictPath    string
+	targetURL   string
+	urlListPath string // URL列表文件路径
+	client      *http.Client
+	visited     = struct {
 		sync.RWMutex
 		m map[string]bool
 	}{m: make(map[string]bool)}
@@ -159,6 +160,7 @@ func printHelp() {
 		{"-h", "无", "	显示当前帮助信息"},
 		{"-v", "无", "	显示工具版本信息"},
 		{"-u", "<必填>", "	目标URL (例：https://example.com 或 example.com)"},
+		{"-U", "无", "	目标URL列表文件 (每行一个URL，用于探活检测)"},
 		{"-w", "<必填>", "	路径字典文件 (支持#注释、自动忽略空行)"},
 		{"-c", "10", "	并发请求数 (建议10-50，防止触发目标限流)"},
 		{"-d", "1", "	最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
@@ -170,7 +172,7 @@ func printHelp() {
 		{"-m", "GET", "	HTTP请求方法 (支持: GET,POST,OPTIONS)"},
 		{"-t", "1", "	请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
 		{"-H", "无", "	自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
-		{"--data", "无", "	请求体数据 (例：--data \"{user:admin}\")"},
+		{"-data", "无", "	请求体数据 (例：-data \"{user:admin}\")"},
 	}
 
 	// 打印参数列表
@@ -192,6 +194,7 @@ func init() {
 	flag.BoolVar(&showVersion, "v", false, "显示版本信息")
 	flag.StringVar(&dictPath, "w", "", "路径字典文件")
 	flag.StringVar(&targetURL, "u", "", "目标URL地址")
+	flag.StringVar(&urlListPath, "U", "", "URL列表文件路径")
 	flag.IntVar(&concurrent, "c", 10, "并发数量")
 	flag.IntVar(&maxDepth, "d", 1, "最大递归深度")
 	flag.StringVar(&extensionStr, "x", "", "文件后缀扩展，用逗号分隔 (例如: php,txt,bak)")
@@ -216,10 +219,23 @@ func init() {
 		os.Exit(0)
 	}
 
-	if dictPath == "" || targetURL == "" {
-		fmt.Printf("%s\n[ERROR] 缺少必需参数 -u (目标URL) 和 -w (字典文件)%s\n", red, reset)
-		fmt.Println("提示：执行 gofus -h 查看完整使用说明\n")
-		os.Exit(1)
+	if urlListPath != "" {
+		// URL列表模式：只需要URL列表文件
+		if dictPath != "" {
+			fmt.Printf("%s\n[ERROR] -U 和 -w 选项不能同时使用%s\n", red, reset)
+			os.Exit(1)
+		}
+		if targetURL != "" {
+			fmt.Printf("%s\n[ERROR] -U 和 -u 选项不能同时使用%s\n", red, reset)
+			os.Exit(1)
+		}
+	} else {
+		// 正常扫描模式：需要URL和字典文件
+		if dictPath == "" || targetURL == "" {
+			fmt.Printf("%s\n[ERROR] 缺少必需参数 -u (目标URL) 和 -w (字典文件)%s\n", red, reset)
+			fmt.Println("提示：执行 gofus -h 查看完整使用说明\n")
+			os.Exit(1)
+		}
 	}
 
 	filterCodes = parseFilterNumbers(filterCodeStr)
@@ -258,11 +274,14 @@ func init() {
 		},
 	}
 
-	if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
-		targetURL = "http://" + targetURL
-	}
-	if !strings.HasSuffix(targetURL, "/") {
-		targetURL += "/"
+	// 只在非URL列表模式下处理目标URL
+	if urlListPath == "" && targetURL != "" {
+		if !strings.HasPrefix(targetURL, "http://") && !strings.HasPrefix(targetURL, "https://") {
+			targetURL = "http://" + targetURL
+		}
+		if !strings.HasSuffix(targetURL, "/") {
+			targetURL += "/"
+		}
 	}
 }
 
@@ -390,13 +409,44 @@ func main() {
 	logo()
 
 	// 准备配置信息
-	configLines := []string{
-		fmt.Sprintf("#目标URL    : %s", targetURL),
-		fmt.Sprintf("#字典文件   : %s", dictPath),
-		fmt.Sprintf("#并发数量   : %d", concurrent),
-		fmt.Sprintf("#最大深度   : %d", maxDepth),
-		fmt.Sprintf("#HTTP方法   : %s", httpMethod),
-		fmt.Sprintf("#超时时间   : %d秒", timeout),
+	var configLines []string
+	var words []string
+	var urls []string
+
+	if urlListPath != "" {
+		// URL列表模式
+		var err error
+		urls, err = readURLList(urlListPath)
+		if err != nil {
+			fmt.Printf("%s【错误】读取URL列表失败: %v%s\n", red, err, reset)
+			os.Exit(1)
+		}
+		totalWords = len(urls)
+		configLines = []string{
+			fmt.Sprintf("#URL文件   : %s", urlListPath),
+			fmt.Sprintf("#URL数量   : %d", len(urls)),
+			fmt.Sprintf("#并发数量  : %d", concurrent),
+			fmt.Sprintf("#HTTP方法  : %s", httpMethod),
+			fmt.Sprintf("#超时时间  : %d秒", timeout),
+		}
+	} else {
+		// 正常扫描模式
+		var err error
+		words, err = readDictionary(dictPath)
+		if err != nil {
+			fmt.Printf("%s【错误】读取字典失败: %v%s\n", red, err, reset)
+			os.Exit(1)
+		}
+		totalWords = len(words)
+		configLines = []string{
+			fmt.Sprintf("#目标URL    : %s", targetURL),
+			fmt.Sprintf("#字典文件   : %s", dictPath),
+			fmt.Sprintf("#字典加载   : %d", len(words)),
+			fmt.Sprintf("#并发数量   : %d", concurrent),
+			fmt.Sprintf("#最大深度   : %d", maxDepth),
+			fmt.Sprintf("#HTTP方法   : %s", httpMethod),
+			fmt.Sprintf("#超时时间   : %d秒", timeout),
+		}
 	}
 
 	// 添加可选的过滤信息
@@ -409,7 +459,7 @@ func main() {
 	if len(matchCodes) > 0 {
 		configLines = append(configLines, fmt.Sprintf("#匹配状态码 : %s", formatIntArray(matchCodes)))
 	}
-	if len(extensions) > 0 {
+	if len(extensions) > 0 && urlListPath == "" {
 		configLines = append(configLines, fmt.Sprintf("#扩展后缀   : %s", formatExtensionArray(extensions)))
 	}
 	if ignoreBody {
@@ -421,16 +471,6 @@ func main() {
 	if requestData != "" {
 		configLines = append(configLines, "#请求体数据 : 已设置")
 	}
-
-	// 读取字典并添加加载信息
-	words, err := readDictionary(dictPath)
-	if err != nil {
-		fmt.Printf("%s【错误】读取字典失败: %v%s\n", red, err, reset)
-		os.Exit(1)
-	}
-
-	totalWords = len(words)
-	configLines = append(configLines, fmt.Sprintf("#字典加载   : %d", len(words)))
 
 	// 打印格式化的配置框
 	printConfigBox(configLines)
@@ -455,7 +495,14 @@ func main() {
 	fmt.Printf("\n") // 预留进度条行
 
 	semaphore := make(chan struct{}, concurrent)
-	scanPath(targetURL, words, semaphore, 1)
+	// 根据模式执行不同的扫描逻辑
+	if urlListPath != "" {
+		// URL列表探活模式
+		probeURLList(urls)
+	} else {
+		// 正常扫描模式
+		scanPath(targetURL, words, semaphore, 1)
+	}
 	wg.Wait()
 
 	// 关闭输出队列
@@ -472,7 +519,16 @@ func main() {
 	fmt.Fprint(os.Stderr, "\r\033[K\n")
 
 	// 扫描完成后显示最终统计
-	fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d 个%s\n", green, atomic.LoadInt64(&scannedCount), atomic.LoadInt64(&errorCount), reset)
+	if urlListPath != "" {
+		totalScanned := atomic.LoadInt64(&scannedCount)
+		totalErrors := atomic.LoadInt64(&errorCount)
+		totalSuccess := totalScanned - totalErrors
+		fmt.Printf("%s[+] 探活完成! 总计扫描: %d 个URL，成功: %d 个，错误: %d 个%s\n",
+			green, totalScanned, totalSuccess, totalErrors, reset)
+	} else {
+		fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d 个%s\n",
+			green, atomic.LoadInt64(&scannedCount), atomic.LoadInt64(&errorCount), reset)
+	}
 }
 
 func readDictionary(path string) ([]string, error) {
@@ -500,6 +556,28 @@ func readDictionary(path string) ([]string, error) {
 	return words, scanner.Err()
 }
 
+// 新增：读取URL列表文件
+func readURLList(path string) ([]string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var urls []string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		url := strings.TrimSpace(scanner.Text())
+		if url != "" && !strings.HasPrefix(url, "#") {
+			// 确保 URL 有协议前缀
+			if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+				url = "http://" + url
+			}
+			urls = append(urls, url)
+		}
+	}
+	return urls, scanner.Err()
+}
+
 // 新增：检查路径是否已有文件扩展名
 func hasFileExtension(path string) bool {
 	// 获取最后一个斜杠后的部分
@@ -512,6 +590,123 @@ func hasFileExtension(path string) bool {
 	// 检查是否有有意义的扩展名（点后面有字符）
 	dotIndex := strings.LastIndex(filename, ".")
 	return dotIndex > 0 && dotIndex < len(filename)-1
+}
+
+// 新增：URL探活检测函数
+func probeURL(url string, semaphore chan struct{}) {
+	defer func() { <-semaphore }()
+
+	// 检查是否暂停
+	if atomic.LoadInt32(&isPaused) == 1 {
+		return
+	}
+
+	// 创建请求体（支持任何HTTP方法）
+	var requestBody io.Reader
+	if requestData != "" {
+		// 在请求体末尾添加两个换行符，确保请求格式完整
+		requestBody = strings.NewReader(requestData + "\n\n")
+	}
+
+	// 创建自定义HTTP请求，设置User-Agent
+	req, err := http.NewRequest(httpMethod, url, requestBody)
+	if err != nil {
+		// 增加扫描计数和错误计数
+		atomic.AddInt64(&scannedCount, 1)
+		atomic.AddInt64(&errorCount, 1)
+		printResult(fmt.Sprintf("%s[请求错误] %s: %v%s", red, url, err, reset))
+		return
+	}
+
+	// 设置User-Agent为gofus
+	req.Header.Set("User-Agent", "gofus/1.0")
+
+	// 应用自定义请求头
+	applyCustomHeaders(req, customHeaders)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		// 增加扫描计数和错误计数
+		atomic.AddInt64(&scannedCount, 1)
+		atomic.AddInt64(&errorCount, 1)
+
+		// 显示详细的错误信息
+		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
+			printResult(fmt.Sprintf("[%sTimeout%s] %s", red, reset, url))
+		} else if strings.Contains(err.Error(), "tls") {
+			printResult(fmt.Sprintf("[%sTLS错误%s] %s - %v", red, reset, url, err))
+		} else if strings.Contains(err.Error(), "connection refused") {
+			printResult(fmt.Sprintf("[%s连接拒绝%s] %s", red, reset, url))
+		} else if strings.Contains(err.Error(), "no such host") {
+			printResult(fmt.Sprintf("[%sDNS解析失败%s] %s", red, reset, url))
+		} else if strings.Contains(err.Error(), "network is unreachable") {
+			printResult(fmt.Sprintf("[%s网络不可达%s] %s", red, reset, url))
+		} else {
+			// 其他未知错误
+			printResult(fmt.Sprintf("[%s网络错误%s] %s - %v", red, reset, url, err))
+		}
+		return
+	}
+	defer resp.Body.Close()
+
+	// 更新扫描计数
+	atomic.AddInt64(&scannedCount, 1)
+
+	// 更新请求速率
+	rateMutex.Lock()
+	now := time.Now()
+	if !lastRequestTime.IsZero() {
+		elapsed := now.Sub(lastRequestTime).Seconds()
+		if elapsed > 0 {
+			// 计算瞬时速率
+			instantRate := int64(1 / elapsed)
+			// 使用加权平均来平滑速率变化
+			currentRate := atomic.LoadInt64(&requestRate)
+			if currentRate == 0 {
+				atomic.StoreInt64(&requestRate, instantRate)
+			} else {
+				// 加权平均：新速率吅30%，旧速率吅70%
+				newRate := int64(float64(currentRate)*0.7 + float64(instantRate)*0.3)
+				atomic.StoreInt64(&requestRate, newRate)
+			}
+		}
+	}
+	lastRequestTime = now
+	rateMutex.Unlock()
+
+	// 只在未被过滤且匹配指定状态码时才输出结果
+	if !isFilteredCode(resp.StatusCode) && isMatchedCode(resp.StatusCode) {
+		// 根据状态码选择颜色输出
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// 2xx状态码：绿色
+			printResult(fmt.Sprintf("[%s%d%s] %s", green, resp.StatusCode, reset, url))
+		} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			// 3xx状态码：蓝色
+			printResult(fmt.Sprintf("[%s%d%s] %s", blue, resp.StatusCode, reset, url))
+		} else if resp.StatusCode >= 400 {
+			// 4xx和5xx状态码：红色
+			printResult(fmt.Sprintf("[%s%d%s] %s", red, resp.StatusCode, reset, url))
+		} else {
+			// 其他状态码：默认颜色
+			printResult(fmt.Sprintf("[%d] %s", resp.StatusCode, url))
+		}
+	}
+}
+
+// 新增：URL列表探活函数
+func probeURLList(urls []string) {
+	semaphore := make(chan struct{}, concurrent)
+
+	for _, url := range urls {
+		wg.Add(1)
+		semaphore <- struct{}{}
+		go func(u string) {
+			defer wg.Done()
+			probeURL(u, semaphore)
+		}(url)
+	}
+
+	wg.Wait()
 }
 
 func scanPath(basePath string, words []string, semaphore chan struct{}, depth int) {
