@@ -16,6 +16,13 @@ import (
 	"time"
 )
 
+// 版本信息
+const (
+	version   = "1.0.0"
+	buildDate = "2025-8-29"
+	author    = "x0da6h"
+)
+
 var (
 	dictPath  string
 	targetURL string
@@ -28,11 +35,17 @@ var (
 	concurrent      int
 	maxDepth        int   // 最大递归深度
 	filterCodes     []int // 需要过滤的状态码
+	matchCodes      []int // 需要匹配的状态码（只输出这些状态码）
 	filterLengths   []int // 需要过滤的响应体大小
 	filterCodeStr   string
+	matchCodeStr    string // 匹配状态码参数字符串
 	filterLengthStr string
 	extensions      []string // 需要扩展的文件后缀
 	extensionStr    string   // 扩展后缀参数字符串
+	showVersion     bool     // 显示版本信息
+	ignoreBody      bool     // 忽略响应体内容，只获取响应头
+	httpMethod      string   // HTTP请求方法
+	timeout         int      // 请求超时时间（秒）
 
 	// 新增：扫描状态统计
 	scannedCount    int64     // 已扫描数量
@@ -128,61 +141,96 @@ func printHelp() {
 		defaultVal string
 		desc       string
 	}{
-		{"-h", "无", " 显示当前帮助信息"},
-		{"-u", "<必填>", "目标URL (例：https://example.com 或 example.com)"},
-		{"-w", "<必填>", "路径字典文件 (支持#注释、自动忽略空行)"},
-		{"-c", "10", "  并发请求数 (建议10-50，防止触发目标限流)"},
-		{"-d", "1", "  最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
-		{"-fc", "无", " 过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
-		{"-fs", "无", " 过滤响应大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
-		{"-x", "无", " 文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
+		{"-h", "无", "\t显示当前帮助信息"},
+		{"-v", "无", "\t显示工具版本信息"},
+		{"-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
+		{"-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
+		{"-c", "10", "\t并发请求数 (建议10-50，防止触发目标限流)"},
+		{"-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
+		{"-fc", "无", "\t过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
+		{"-mc", "无", "\t匹配状态码 (逗号分隔，例：-mc 200,500 只显示200/500)"},
+		{"-fs", "无", "\t过滤响应体大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
+		{"-x", "无", "\t文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
+		{"-ib", "无", "\t忽略响应体内容 (只获取响应头)"},
+		{"-m", "GET", "\tHTTP请求方法 (支持: GET,POST,OPTIONS)"},
+		{"-t", "1", "\t请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
 	}
 
 	// 打印参数列表
-	fmt.Println("\n选项说明:")
+	fmt.Println("\n选项说明:\n")
 	for _, p := range params {
 		fmt.Printf("  %-6s  默认值: %-8s  %s\n", p.flag, p.defaultVal, p.desc)
 	}
 }
 
+// 打印版本信息
+func printVersion() {
+	logo()
+	fmt.Printf("\n版本: %s\n", version)
+	fmt.Printf("构建日期: %s\n", buildDate)
+	fmt.Printf("作者: %s\n", author)
+}
+
 func init() {
-	// 1. 定义命令行参数
+	flag.BoolVar(&showVersion, "v", false, "显示版本信息")
 	flag.StringVar(&dictPath, "w", "", "路径字典文件")
 	flag.StringVar(&targetURL, "u", "", "目标URL地址")
 	flag.IntVar(&concurrent, "c", 10, "并发数量")
 	flag.IntVar(&maxDepth, "d", 1, "最大递归深度")
-	flag.StringVar(&filterCodeStr, "fc", "", "需要过滤的状态码，用逗号分隔 (例如: 404,403)")
-	flag.StringVar(&filterLengthStr, "fs", "", "需要过滤的响应体大小，用逗号分隔 (例如: 1000,2000)")
 	flag.StringVar(&extensionStr, "x", "", "文件后缀扩展，用逗号分隔 (例如: php,txt,bak)")
+	flag.StringVar(&httpMethod, "m", "GET", "HTTP请求方法 (支持: GET,POST,OPTIONS)")
+	flag.IntVar(&timeout, "t", 1, "请求超时时间(秒)")
+	flag.StringVar(&filterCodeStr, "fc", "", "需要过滤的状态码，用逗号分隔 (例如: 404,403)")
+	flag.StringVar(&matchCodeStr, "mc", "", "需要匹配的状态码，用逗号分隔 (例如: 200,500)")
+	flag.StringVar(&filterLengthStr, "fs", "", "需要过滤的响应体大小，用逗号分隔 (例如: 1000,2000)")
+	flag.BoolVar(&ignoreBody, "ib", false, "忽略响应体内容，只获取响应头")
 
 	flag.Usage = printHelp
-
 	flag.Parse()
+	// 处理版本参数
+	if showVersion {
+		printVersion()
+		os.Exit(0)
+	}
 
 	if len(os.Args) == 2 && (os.Args[1] == "-h" || os.Args[1] == "--help") {
 		os.Exit(0)
 	}
 
 	if dictPath == "" || targetURL == "" {
-		fmt.Printf("%s\n【ERROR】缺少必需参数 -u (目标URL) 和 -w (字典文件)%s\n", red, reset)
+		fmt.Printf("%s\n[ERROR] 缺少必需参数 -u (目标URL) 和 -w (字典文件)%s\n", red, reset)
 		fmt.Println("提示：执行 gofus -h 查看完整使用说明\n")
 		os.Exit(1)
 	}
 
 	filterCodes = parseFilterNumbers(filterCodeStr)
+	matchCodes = parseFilterNumbers(matchCodeStr)
 	filterLengths = parseFilterNumbers(filterLengthStr)
 	extensions = parseExtensions(extensionStr)
 
+	// 验证HTTP方法是否有效
+	httpMethod = strings.ToUpper(httpMethod)
+	if httpMethod != "GET" && httpMethod != "POST" && httpMethod != "OPTIONS" {
+		fmt.Printf("%s\n[ERROR] 不支持的HTTP方法: %s，支持的方法: GET, POST, OPTIONS%s\n", red, httpMethod, reset)
+		os.Exit(1)
+	}
+
+	// 验证超时时间是否合理
+	if timeout < 1 || timeout > 300 {
+		fmt.Printf("%s\n[ERROR] 超时时间不合理: %d秒，允许范围: 1-300秒%s\n", red, timeout, reset)
+		os.Exit(1)
+	}
+
 	client = &http.Client{
-		Timeout: 30 * time.Second, // 增加超时时间到30秒
+		Timeout: time.Duration(timeout) * time.Second, // 使用用户指定的超时时间
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 		Transport: &http.Transport{
-			TLSHandshakeTimeout:   15 * time.Second, // TLS握手超时
-			ResponseHeaderTimeout: 10 * time.Second, // 响应头超时
-			ExpectContinueTimeout: 5 * time.Second,  // Expect-Continue超时
-			IdleConnTimeout:       30 * time.Second, // 空闲连接超时
+			TLSHandshakeTimeout:   time.Duration(timeout/2) * time.Second, // TLS握手超时设为总超时的一半
+			ResponseHeaderTimeout: time.Duration(timeout/3) * time.Second, // 响应头超时设为总超时的三分之一
+			ExpectContinueTimeout: 5 * time.Second,                        // Expect-Continue超时
+			IdleConnTimeout:       30 * time.Second,                       // 空闲连接超时
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true, // 跳过TLS证书验证
 			},
@@ -234,6 +282,21 @@ func parseExtensions(extStr string) []string {
 
 func isFilteredCode(code int) bool {
 	for _, c := range filterCodes {
+		if code == c {
+			return true
+		}
+	}
+	return false
+}
+
+// 新增：检查状态码是否在匹配列表中
+func isMatchedCode(code int) bool {
+	// 如果没有设置匹配列表，则匹配所有状态码
+	if len(matchCodes) == 0 {
+		return true
+	}
+	// 检查状态码是否在匹配列表中
+	for _, c := range matchCodes {
 		if code == c {
 			return true
 		}
@@ -296,6 +359,8 @@ func main() {
 		fmt.Sprintf("#字典文件   : %s", dictPath),
 		fmt.Sprintf("#并发数量   : %d", concurrent),
 		fmt.Sprintf("#最大深度   : %d", maxDepth),
+		fmt.Sprintf("#HTTP方法   : %s", httpMethod),
+		fmt.Sprintf("#超时时间   : %d秒", timeout),
 	}
 
 	// 添加可选的过滤信息
@@ -305,8 +370,14 @@ func main() {
 	if len(filterCodes) > 0 {
 		configLines = append(configLines, fmt.Sprintf("#过滤状态码 : %s", formatIntArray(filterCodes)))
 	}
+	if len(matchCodes) > 0 {
+		configLines = append(configLines, fmt.Sprintf("#匹配状态码 : %s", formatIntArray(matchCodes)))
+	}
 	if len(extensions) > 0 {
 		configLines = append(configLines, fmt.Sprintf("#扩展后缀   : %s", formatExtensionArray(extensions)))
+	}
+	if ignoreBody {
+		configLines = append(configLines, "#忽略响应体 : 开启")
 	}
 
 	// 读取字典并添加加载信息
@@ -433,8 +504,15 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 
 	fullPath := basePath + word
 
+	// 根据用户选项决定HTTP方法
+	requestMethod := httpMethod
+	if ignoreBody && httpMethod == "GET" {
+		// 如果启用-ib且使用GET方法，则改为HEAD方法
+		requestMethod = "HEAD"
+	}
+
 	// 创建自定义HTTP请求，设置User-Agent
-	req, err := http.NewRequest("GET", fullPath, nil)
+	req, err := http.NewRequest(requestMethod, fullPath, nil)
 	if err != nil {
 		// 增加错误计数
 		atomic.AddInt64(&errorCount, 1)
@@ -527,21 +605,46 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 		}
 	}
 
-	// 只在未被过滤时才输出结果
-	if !isFilteredCode(resp.StatusCode) && !isFilteredLength(contentLength) {
+	// 只在未被过滤且匹配指定状态码时才输出结果
+	if !isFilteredCode(resp.StatusCode) && !isFilteredLength(contentLength) && isMatchedCode(resp.StatusCode) {
+		// 根据是否使用-ib选项决定输出格式
+		var outputFormat string
+		if ignoreBody {
+			// 使用-ib选项时，不显示大小信息
+			outputFormat = "[深度: %d]"
+		} else {
+			// 正常模式显示深度和大小
+			outputFormat = "[深度: %d, 大小: %d]"
+		}
+
 		// 根据状态码选择颜色输出
 		if resp.StatusCode == http.StatusOK {
 			// 200状态码：绿色
-			printResult(fmt.Sprintf("[%s%d%s] %s\t[深度: %d, 大小: %d]",
-				green, resp.StatusCode, reset, fullPath, depth, contentLength))
+			if ignoreBody {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					green, resp.StatusCode, reset, fullPath, depth))
+			} else {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					green, resp.StatusCode, reset, fullPath, depth, contentLength))
+			}
 		} else if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
 			// 301和302状态码：蓝色
-			printResult(fmt.Sprintf("[%s%d%s] %s\t[深度: %d, 大小: %d]",
-				blue, resp.StatusCode, reset, fullPath, depth, contentLength))
+			if ignoreBody {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					blue, resp.StatusCode, reset, fullPath, depth))
+			} else {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					blue, resp.StatusCode, reset, fullPath, depth, contentLength))
+			}
 		} else {
 			// 其他状态码：默认颜色
-			printResult(fmt.Sprintf("[%d] %s\t[深度: %d, 大小: %d]",
-				resp.StatusCode, fullPath, depth, contentLength))
+			if ignoreBody {
+				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
+					resp.StatusCode, fullPath, depth))
+			} else {
+				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
+					resp.StatusCode, fullPath, depth, contentLength))
+			}
 		}
 	}
 
@@ -648,7 +751,7 @@ func updateStatusBar() {
 	rate := atomic.LoadInt64(&requestRate)
 
 	// 使用简单的\r回车符实现就地更新，移除复杂的ANSI光标控制
-	progressLine := fmt.Sprintf("\r%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s",
+	progressLine := fmt.Sprintf("\r%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s ",
 		green,
 		float64(scanned)/float64(totalWords)*100,
 		formatRate(rate),
@@ -663,7 +766,7 @@ func updateStatusBar() {
 // 新增：启动状态栏更新协程
 func startStatusBarUpdater() {
 	go func() {
-		ticker := time.NewTicker(500 * time.Millisecond) // 降低到500ms更新一次，减少闪烁
+		ticker := time.NewTicker(300 * time.Millisecond) // 降低到500ms更新一次，减少闪烁
 		defer ticker.Stop()
 
 		for {

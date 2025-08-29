@@ -1,0 +1,6 @@
+admin
+api
+login
+index
+robots.txt
+favicon.ico
