@@ -122,9 +122,10 @@ func printConfigBox(lines []string) {
 		}
 	}
 
-	// 确保最小宽度
-	if maxWidth < 30 {
-		maxWidth = 30
+	// 不设置最小宽度，让配置框根据内容自动调整（保持紧凑）
+	// 只在内容宽度低于20时才设置最小宽度
+	if maxWidth < 20 {
+		maxWidth = 20
 	}
 
 	// 生成上边框
@@ -423,11 +424,11 @@ func main() {
 		}
 		totalWords = len(urls)
 		configLines = []string{
-			fmt.Sprintf("#URL文件   : %s", urlListPath),
-			fmt.Sprintf("#URL数量   : %d", len(urls)),
-			fmt.Sprintf("#并发数量  : %d", concurrent),
-			fmt.Sprintf("#HTTP方法  : %s", httpMethod),
-			fmt.Sprintf("#超时时间  : %d秒", timeout),
+			fmt.Sprintf("#URL文件    : %s", urlListPath),
+			fmt.Sprintf("#URL数量    : %d", len(urls)),
+			fmt.Sprintf("#并发数量   : %d", concurrent),
+			fmt.Sprintf("#HTTP方法   : %s", httpMethod),
+			fmt.Sprintf("#超时时间   : %d秒", timeout),
 		}
 	} else {
 		// 正常扫描模式
@@ -439,13 +440,13 @@ func main() {
 		}
 		totalWords = len(words)
 		configLines = []string{
-			fmt.Sprintf("#目标URL    : %s", targetURL),
-			fmt.Sprintf("#字典文件   : %s", dictPath),
-			fmt.Sprintf("#字典加载   : %d", len(words)),
-			fmt.Sprintf("#并发数量   : %d", concurrent),
-			fmt.Sprintf("#最大深度   : %d", maxDepth),
-			fmt.Sprintf("#HTTP方法   : %s", httpMethod),
-			fmt.Sprintf("#超时时间   : %d秒", timeout),
+			fmt.Sprintf("#目标URL     : %s", targetURL),
+			fmt.Sprintf("#字典文件    : %s", dictPath),
+			fmt.Sprintf("#字典加载    : %d", len(words)),
+			fmt.Sprintf("#并发数量    : %d", concurrent),
+			fmt.Sprintf("#最大深度    : %d", maxDepth),
+			fmt.Sprintf("#HTTP方法    : %s", httpMethod),
+			fmt.Sprintf("#超时时间    : %d秒", timeout),
 		}
 	}
 
@@ -454,7 +455,7 @@ func main() {
 		configLines = append(configLines, fmt.Sprintf("#过滤大小   : %s", formatIntArray(filterLengths)))
 	}
 	if len(filterCodes) > 0 {
-		configLines = append(configLines, fmt.Sprintf("#过滤状态码 : %s", formatIntArray(filterCodes)))
+		configLines = append(configLines, fmt.Sprintf("#过滤状态码  : %s", formatIntArray(filterCodes)))
 	}
 	if len(matchCodes) > 0 {
 		configLines = append(configLines, fmt.Sprintf("#匹配状态码 : %s", formatIntArray(matchCodes)))
