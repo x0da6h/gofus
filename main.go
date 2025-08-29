@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,18 @@ const (
 	author    = "x0da6h"
 )
 
+// 自定义类型用于处理多个字符串值
+type headerFlags []string
+
+func (h *headerFlags) String() string {
+	return strings.Join(*h, ", ")
+}
+
+func (h *headerFlags) Set(value string) error {
+	*h = append(*h, value)
+	return nil
+}
+
 var (
 	dictPath  string
 	targetURL string
@@ -40,12 +53,14 @@ var (
 	filterCodeStr   string
 	matchCodeStr    string // 匹配状态码参数字符串
 	filterLengthStr string
-	extensions      []string // 需要扩展的文件后缀
-	extensionStr    string   // 扩展后缀参数字符串
-	showVersion     bool     // 显示版本信息
-	ignoreBody      bool     // 忽略响应体内容，只获取响应头
-	httpMethod      string   // HTTP请求方法
-	timeout         int      // 请求超时时间（秒）
+	extensions      []string    // 需要扩展的文件后缀
+	extensionStr    string      // 扩展后缀参数字符串
+	showVersion     bool        // 显示版本信息
+	ignoreBody      bool        // 忽略响应体内容，只获取响应头
+	httpMethod      string      // HTTP请求方法
+	timeout         int         // 请求超时时间（秒）
+	customHeaders   headerFlags // 自定义请求头
+	requestData     string      // POST请求体数据
 
 	// 新增：扫描状态统计
 	scannedCount    int64     // 已扫描数量
@@ -82,7 +97,7 @@ func logo() {
   ╚██████╔╝ ╚██████╔╝ ██║      ╚██████╔╝ ███████║
    ╚═════╝   ╚═════╝  ╚═╝       ╚═════╝  ╚══════╝
 
-  gofus - WEB路径递归扫描工具 | by x0da6h
+  gofus - Web递归FUZZ工具 | by x0da6h
 `
 	fmt.Print(gofusLogo)
 }
@@ -141,19 +156,21 @@ func printHelp() {
 		defaultVal string
 		desc       string
 	}{
-		{"-h", "无", "\t显示当前帮助信息"},
-		{"-v", "无", "\t显示工具版本信息"},
-		{"-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
-		{"-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
-		{"-c", "10", "\t并发请求数 (建议10-50，防止触发目标限流)"},
-		{"-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
-		{"-fc", "无", "\t过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
-		{"-mc", "无", "\t匹配状态码 (逗号分隔，例：-mc 200,500 只显示200/500)"},
-		{"-fs", "无", "\t过滤响应体大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
-		{"-x", "无", "\t文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
-		{"-ib", "无", "\t忽略响应体内容 (只获取响应头)"},
-		{"-m", "GET", "\tHTTP请求方法 (支持: GET,POST,OPTIONS)"},
-		{"-t", "1", "\t请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
+		{"-h", "无", "	显示当前帮助信息"},
+		{"-v", "无", "	显示工具版本信息"},
+		{"-u", "<必填>", "	目标URL (例：https://example.com 或 example.com)"},
+		{"-w", "<必填>", "	路径字典文件 (支持#注释、自动忽略空行)"},
+		{"-c", "10", "	并发请求数 (建议10-50，防止触发目标限流)"},
+		{"-d", "1", "	最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
+		{"-fc", "无", "	过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
+		{"-mc", "无", "	匹配状态码 (逗号分隔，例：-mc 200,500 只显示200/500)"},
+		{"-fs", "无", "	过滤响应体大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
+		{"-x", "无", "	文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
+		{"-ib", "无", "	忽略响应体内容 (只获取响应头)"},
+		{"-m", "GET", "	HTTP请求方法 (支持: GET,POST,OPTIONS)"},
+		{"-t", "1", "	请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
+		{"-H", "无", "	自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
+		{"--data", "无", "	请求体数据 (例：--data \"{user:admin}\")"},
 	}
 
 	// 打印参数列表
@@ -180,10 +197,12 @@ func init() {
 	flag.StringVar(&extensionStr, "x", "", "文件后缀扩展，用逗号分隔 (例如: php,txt,bak)")
 	flag.StringVar(&httpMethod, "m", "GET", "HTTP请求方法 (支持: GET,POST,OPTIONS)")
 	flag.IntVar(&timeout, "t", 1, "请求超时时间(秒)")
+	flag.StringVar(&requestData, "data", "", "请求体数据")
 	flag.StringVar(&filterCodeStr, "fc", "", "需要过滤的状态码，用逗号分隔 (例如: 404,403)")
 	flag.StringVar(&matchCodeStr, "mc", "", "需要匹配的状态码，用逗号分隔 (例如: 200,500)")
 	flag.StringVar(&filterLengthStr, "fs", "", "需要过滤的响应体大小，用逗号分隔 (例如: 1000,2000)")
 	flag.BoolVar(&ignoreBody, "ib", false, "忽略响应体内容，只获取响应头")
+	flag.Var(&customHeaders, "H", "自定义请求头 (例如: -H 'Name: Value')")
 
 	flag.Usage = printHelp
 	flag.Parse()
@@ -220,6 +239,8 @@ func init() {
 		fmt.Printf("%s\n[ERROR] 超时时间不合理: %d秒，允许范围: 1-300秒%s\n", red, timeout, reset)
 		os.Exit(1)
 	}
+
+	// 请求体数据可用于任何HTTP方法（符合FUZZ工具的设计理念）
 
 	client = &http.Client{
 		Timeout: time.Duration(timeout) * time.Second, // 使用用户指定的超时时间
@@ -278,6 +299,21 @@ func parseExtensions(extStr string) []string {
 		}
 	}
 	return result
+}
+
+// 新增：解析请求头并应用到请求上
+func applyCustomHeaders(req *http.Request, headers []string) {
+	for _, header := range headers {
+		// 解析 "Name: Value" 格式
+		parts := strings.SplitN(header, ":", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+			if key != "" {
+				req.Header.Set(key, value)
+			}
+		}
+	}
 }
 
 func isFilteredCode(code int) bool {
@@ -378,6 +414,12 @@ func main() {
 	}
 	if ignoreBody {
 		configLines = append(configLines, "#忽略响应体 : 开启")
+	}
+	if len(customHeaders) > 0 {
+		configLines = append(configLines, fmt.Sprintf("#自定义请求头 : %d个", len(customHeaders)))
+	}
+	if requestData != "" {
+		configLines = append(configLines, "#请求体数据 : 已设置")
 	}
 
 	// 读取字典并添加加载信息
@@ -511,8 +553,15 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 		requestMethod = "HEAD"
 	}
 
+	// 创建请求体（支持任何HTTP方法）
+	var requestBody io.Reader
+	if requestData != "" {
+		// 在请求体末尾添加两个换行符，确保请求格式完整
+		requestBody = strings.NewReader(requestData + "\n\n")
+	}
+
 	// 创建自定义HTTP请求，设置User-Agent
-	req, err := http.NewRequest(requestMethod, fullPath, nil)
+	req, err := http.NewRequest(requestMethod, fullPath, requestBody)
 	if err != nil {
 		// 增加错误计数
 		atomic.AddInt64(&errorCount, 1)
@@ -522,6 +571,9 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 
 	// 设置User-Agent为gofus
 	req.Header.Set("User-Agent", "gofus/1.0")
+
+	// 应用自定义请求头
+	applyCustomHeaders(req, customHeaders)
 
 	resp, err := client.Do(req)
 	if err != nil {
