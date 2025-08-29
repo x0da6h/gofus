@@ -28,7 +28,7 @@ var (
 	concurrent      int
 	maxDepth        int   // 最大递归深度
 	filterCodes     []int // 需要过滤的状态码
-	filterLengths   []int // 需要过滤的响应体长度
+	filterLengths   []int // 需要过滤的响应体大小
 	filterCodeStr   string
 	filterLengthStr string
 	extensions      []string // 需要扩展的文件后缀
@@ -134,7 +134,7 @@ func printHelp() {
 		{"-c", "10", "  并发请求数 (建议10-50，防止触发目标限流)"},
 		{"-d", "1", "  最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
 		{"-fc", "无", " 过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
-		{"-fs", "无", " 过滤响应长度 (逗号分隔，例：-fs 1000 不显示长度1000的响应)"},
+		{"-fs", "无", " 过滤响应大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
 		{"-x", "无", " 文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
 	}
 
@@ -250,6 +250,43 @@ func isFilteredLength(length int) bool {
 	return false
 }
 
+// 新增：格式化整数数组为逗号分隔的字符串
+func formatIntArray(arr []int) string {
+	if len(arr) == 0 {
+		return "[]"
+	}
+	strs := make([]string, len(arr))
+	for i, v := range arr {
+		strs[i] = strconv.Itoa(v)
+	}
+	return "[" + strings.Join(strs, ",") + "]"
+}
+
+// 新增：格式化字符串数组为逗号分隔的字符串
+func formatStringArray(arr []string) string {
+	if len(arr) == 0 {
+		return "[]"
+	}
+	return "[" + strings.Join(arr, ",") + "]"
+}
+
+// 新增：格式化扩展名数组为逗号分隔的字符串（去掉句号前缀）
+func formatExtensionArray(arr []string) string {
+	if len(arr) == 0 {
+		return "[]"
+	}
+	// 去掉每个扩展名的句号前缀
+	cleanExts := make([]string, len(arr))
+	for i, ext := range arr {
+		if strings.HasPrefix(ext, ".") {
+			cleanExts[i] = ext[1:] // 去掉句号
+		} else {
+			cleanExts[i] = ext
+		}
+	}
+	return "[" + strings.Join(cleanExts, ",") + "]"
+}
+
 func main() {
 	logo()
 
@@ -262,14 +299,14 @@ func main() {
 	}
 
 	// 添加可选的过滤信息
-	if len(filterCodes) > 0 {
-		configLines = append(configLines, fmt.Sprintf("#过滤状态码 : %v", filterCodes))
-	}
 	if len(filterLengths) > 0 {
-		configLines = append(configLines, fmt.Sprintf("#过滤长度   : %v", filterLengths))
+		configLines = append(configLines, fmt.Sprintf("#过滤大小   : %s", formatIntArray(filterLengths)))
+	}
+	if len(filterCodes) > 0 {
+		configLines = append(configLines, fmt.Sprintf("#过滤状态码 : %s", formatIntArray(filterCodes)))
 	}
 	if len(extensions) > 0 {
-		configLines = append(configLines, fmt.Sprintf("#扩展后缀   : %v", extensions))
+		configLines = append(configLines, fmt.Sprintf("#扩展后缀   : %s", formatExtensionArray(extensions)))
 	}
 
 	// 读取字典并添加加载信息
@@ -279,10 +316,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// 设置总字典条数
 	totalWords = len(words)
-
-	// 添加字典加载信息
 	configLines = append(configLines, fmt.Sprintf("#字典加载   : %d", len(words)))
 
 	// 打印格式化的配置框
@@ -498,15 +532,15 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 		// 根据状态码选择颜色输出
 		if resp.StatusCode == http.StatusOK {
 			// 200状态码：绿色
-			printResult(fmt.Sprintf("[%s%d%s] %s (深度: %d, 长度: %d)",
+			printResult(fmt.Sprintf("[%s%d%s] %s\t[深度: %d, 大小: %d]",
 				green, resp.StatusCode, reset, fullPath, depth, contentLength))
 		} else if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
 			// 301和302状态码：蓝色
-			printResult(fmt.Sprintf("[%s%d%s] %s (深度: %d, 长度: %d)",
+			printResult(fmt.Sprintf("[%s%d%s] %s\t[深度: %d, 大小: %d]",
 				blue, resp.StatusCode, reset, fullPath, depth, contentLength))
 		} else {
 			// 其他状态码：默认颜色
-			printResult(fmt.Sprintf("[%d] %s (深度: %d, 长度: %d)",
+			printResult(fmt.Sprintf("[%d] %s\t[深度: %d, 大小: %d]",
 				resp.StatusCode, fullPath, depth, contentLength))
 		}
 	}
