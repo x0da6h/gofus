@@ -31,12 +31,13 @@ var (
 	filterLengths   []int // 需要过滤的响应体长度
 	filterCodeStr   string
 	filterLengthStr string
+	extensions      []string // 需要扩展的文件后缀
+	extensionStr    string   // 扩展后缀参数字符串
 
 	// 新增：扫描状态统计
 	scannedCount    int64     // 已扫描数量
 	errorCount      int64     // 错误计数
 	totalWords      int       // 总字典条数
-	startTime       time.Time // 开始时间
 	isPaused        int32     // 是否暂停 (0: 运行中, 1: 暂停)
 	requestRate     int64     // 请求速率 (每秒请求数)
 	lastRequestTime time.Time // 上次请求时间
@@ -52,13 +53,11 @@ var (
 
 // ANSI颜色控制码
 const (
-	green   = "\033[32m"
-	red     = "\033[31m"
-	blue    = "\033[34m"
-	yellow  = "\033[33m"
-	cyan    = "\033[36m"
-	magenta = "\033[35m"
-	reset   = "\033[0m"
+	green = "\033[32m"
+	red   = "\033[31m"
+	blue  = "\033[34m"
+	cyan  = "\033[36m"
+	reset = "\033[0m"
 )
 
 func logo() {
@@ -135,7 +134,8 @@ func printHelp() {
 		{"-c", "10", "  并发请求数 (建议10-50，防止触发目标限流)"},
 		{"-d", "1", "  最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
 		{"-fc", "无", " 过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
-		{"-fl", "无", " 过滤响应长度 (逗号分隔，例：-fl 1000 不显示长度1000的响应)"},
+		{"-fs", "无", " 过滤响应长度 (逗号分隔，例：-fs 1000 不显示长度1000的响应)"},
+		{"-x", "无", " 文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
 	}
 
 	// 打印参数列表
@@ -152,7 +152,8 @@ func init() {
 	flag.IntVar(&concurrent, "c", 10, "并发数量")
 	flag.IntVar(&maxDepth, "d", 1, "最大递归深度")
 	flag.StringVar(&filterCodeStr, "fc", "", "需要过滤的状态码，用逗号分隔 (例如: 404,403)")
-	flag.StringVar(&filterLengthStr, "fl", "", "需要过滤的响应体长度，用逗号分隔 (例如: 1000,2000)")
+	flag.StringVar(&filterLengthStr, "fs", "", "需要过滤的响应体大小，用逗号分隔 (例如: 1000,2000)")
+	flag.StringVar(&extensionStr, "x", "", "文件后缀扩展，用逗号分隔 (例如: php,txt,bak)")
 
 	flag.Usage = printHelp
 
@@ -170,6 +171,7 @@ func init() {
 
 	filterCodes = parseFilterNumbers(filterCodeStr)
 	filterLengths = parseFilterNumbers(filterLengthStr)
+	extensions = parseExtensions(extensionStr)
 
 	client = &http.Client{
 		Timeout: 30 * time.Second, // 增加超时时间到30秒
@@ -210,6 +212,26 @@ func parseFilterNumbers(filterStr string) []int {
 	return result
 }
 
+// 新增：解析文件扩展名
+func parseExtensions(extStr string) []string {
+	var result []string
+	if extStr == "" {
+		return result
+	}
+	parts := strings.Split(extStr, ",")
+	for _, part := range parts {
+		ext := strings.TrimSpace(part)
+		if ext != "" {
+			// 确保扩展名以.开头
+			if !strings.HasPrefix(ext, ".") {
+				ext = "." + ext
+			}
+			result = append(result, ext)
+		}
+	}
+	return result
+}
+
 func isFilteredCode(code int) bool {
 	for _, c := range filterCodes {
 		if code == c {
@@ -245,6 +267,9 @@ func main() {
 	}
 	if len(filterLengths) > 0 {
 		configLines = append(configLines, fmt.Sprintf("#过滤长度   : %v", filterLengths))
+	}
+	if len(extensions) > 0 {
+		configLines = append(configLines, fmt.Sprintf("#扩展后缀   : %v", extensions))
 	}
 
 	// 读取字典并添加加载信息
@@ -314,10 +339,32 @@ func readDictionary(path string) ([]string, error) {
 	for scanner.Scan() {
 		word := strings.TrimSpace(scanner.Text())
 		if word != "" && !strings.HasPrefix(word, "#") {
+			// 原始词条
 			words = append(words, word)
+
+			// 如果指定了扩展名，且该词条没有扩展名，则添加扩展名版本
+			if len(extensions) > 0 && !hasFileExtension(word) {
+				for _, ext := range extensions {
+					words = append(words, word+ext)
+				}
+			}
 		}
 	}
 	return words, scanner.Err()
+}
+
+// 新增：检查路径是否已有文件扩展名
+func hasFileExtension(path string) bool {
+	// 获取最后一个斜杠后的部分
+	lastSlashIndex := strings.LastIndex(path, "/")
+	filename := path
+	if lastSlashIndex >= 0 {
+		filename = path[lastSlashIndex+1:]
+	}
+
+	// 检查是否有有意义的扩展名（点后面有字符）
+	dotIndex := strings.LastIndex(filename, ".")
+	return dotIndex > 0 && dotIndex < len(filename)-1
 }
 
 func scanPath(basePath string, words []string, semaphore chan struct{}, depth int) {
@@ -518,15 +565,6 @@ func printResult(message string) {
 	}
 }
 
-// 新增：清除进度条
-func clearProgressBar() {
-	statusMutex.Lock()
-	defer statusMutex.Unlock()
-
-	fmt.Print("\033[A") // 上移到进度条位置
-	fmt.Print("\033[K") // 清除整行
-}
-
 // 新增：设置信号处理器 (Ctrl+C直接终止)
 func setupSignalHandler() {
 	c := make(chan os.Signal, 1)
@@ -547,55 +585,6 @@ func setupSignalHandler() {
 			atomic.LoadInt64(&errorCount), reset)
 		os.Exit(0)
 	}()
-}
-
-// 新增：清除状态行
-func clearStatusLine() {
-	fmt.Print("\r")
-	fmt.Print(strings.Repeat(" ", 120))
-	fmt.Print("\r")
-}
-
-// 新增：移动光标到上一行并清除
-func moveUpAndClear() {
-	fmt.Print("\033[A")                 // 向上移动一行
-	fmt.Print("\r")                     // 回到行首
-	fmt.Print(strings.Repeat(" ", 120)) // 清空整行
-	fmt.Print("\r")                     // 回到行首
-}
-
-// 新增：绘制进度条 (类似gobuster的进度条)
-func drawProgressBar(current, total int64, width int) string {
-	if total == 0 {
-		return strings.Repeat("░", width)
-	}
-
-	percentage := float64(current) / float64(total)
-	filled := int(float64(width) * percentage)
-
-	bar := strings.Repeat("█", filled)
-	bar += strings.Repeat("░", width-filled)
-
-	return bar
-}
-
-// 新增：格式化时间 (类似ffuf的时间显示)
-func formatDuration(d time.Duration) string {
-	if d.Hours() >= 24 {
-		days := int(d.Hours() / 24)
-		hours := int(d.Hours()) % 24
-		return fmt.Sprintf("%dd %dh", days, hours)
-	} else if d.Hours() >= 1 {
-		hours := int(d.Hours())
-		minutes := int(d.Minutes()) % 60
-		return fmt.Sprintf("%dh %dm", hours, minutes)
-	} else if d.Minutes() >= 1 {
-		minutes := int(d.Minutes())
-		seconds := int(d.Seconds()) % 60
-		return fmt.Sprintf("%dm %ds", minutes, seconds)
-	} else {
-		return fmt.Sprintf("%.0fs", d.Seconds())
-	}
 }
 
 // 新增：格式化速率 (类似ffuf的速率显示)
@@ -624,14 +613,8 @@ func updateStatusBar() {
 	errors := atomic.LoadInt64(&errorCount)
 	rate := atomic.LoadInt64(&requestRate)
 
-	// 更精确的光标控制，防止输出泄露
-	fmt.Print("\033[s")       // 保存当前光标位置
-	fmt.Print("\033[1000;1H") // 移动到屏幕最后一行
-	fmt.Print("\033[2K")      // 清除整行（包括行首和行尾）
-	fmt.Print("\033[1G")      // 移动到行首
-
-	// 构建固定格式的进度信息，使用固定宽度确保数字位置稳定
-	progressLine := fmt.Sprintf("%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s",
+	// 使用简单的\r回车符实现就地更新，移除复杂的ANSI光标控制
+	progressLine := fmt.Sprintf("\r%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s",
 		green,
 		float64(scanned)/float64(totalWords)*100,
 		formatRate(rate),
@@ -639,17 +622,8 @@ func updateStatusBar() {
 		errors,
 		reset)
 
-	// 输出进度信息
-	fmt.Print(progressLine)
-	fmt.Print("\033[u") // 恢复光标位置
-}
-
-// 新增：格式化百分比
-func formatPercentage(current, total int64) string {
-	if total == 0 {
-		return "0.0%"
-	}
-	return fmt.Sprintf("%.1f%%", float64(current)/float64(total)*100)
+	// 输出进度信息到stderr
+	fmt.Fprint(os.Stderr, progressLine)
 }
 
 // 新增：启动状态栏更新协程

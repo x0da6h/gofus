@@ -1,7 +1,0 @@
-1.jpg
-tmp
-new
-1.png
-3.png
-4.png
-12.png
