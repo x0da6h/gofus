@@ -389,6 +389,16 @@ func formatStringArray(arr []string) string {
 	return "[" + strings.Join(arr, ",") + "]"
 }
 
+// 新增：路径规范化函数，用于去重
+func normalizePath(path string) string {
+	// 去除末尾的斜杠，使/123和/123/视为同一个路径
+	path = strings.TrimSpace(path)
+	if len(path) > 0 && strings.HasSuffix(path, "/") && !strings.HasSuffix(path, "//") {
+		path = path[:len(path)-1]
+	}
+	return path
+}
+
 // 新增：格式化扩展名数组为逗号分隔的字符串（去掉句号前缀）
 func formatExtensionArray(arr []string) string {
 	if len(arr) == 0 {
@@ -539,17 +549,27 @@ func readDictionary(path string) ([]string, error) {
 	}
 	defer file.Close()
 	var words []string
+	wordMap := make(map[string]bool) // 用于去重
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		word := strings.TrimSpace(scanner.Text())
 		if word != "" && !strings.HasPrefix(word, "#") {
 			// 原始词条
-			words = append(words, word)
+			normalizedWord := normalizePath(word)
+			if !wordMap[normalizedWord] {
+				wordMap[normalizedWord] = true
+				words = append(words, word)
+			}
 
 			// 如果指定了扩展名，且该词条没有扩展名，则添加扩展名版本
 			if len(extensions) > 0 && !hasFileExtension(word) {
 				for _, ext := range extensions {
-					words = append(words, word+ext)
+					extWord := word + ext
+					normalizedExtWord := normalizePath(extWord)
+					if !wordMap[normalizedExtWord] {
+						wordMap[normalizedExtWord] = true
+						words = append(words, extWord)
+					}
 				}
 			}
 		}
@@ -557,7 +577,7 @@ func readDictionary(path string) ([]string, error) {
 	return words, scanner.Err()
 }
 
-// 新增：读取URL列表文件
+// 新增：读取URL列表文件（带去重功能）
 func readURLList(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -565,6 +585,7 @@ func readURLList(path string) ([]string, error) {
 	}
 	defer file.Close()
 	var urls []string
+	urlMap := make(map[string]bool) // 用于去重
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		url := strings.TrimSpace(scanner.Text())
@@ -573,7 +594,12 @@ func readURLList(path string) ([]string, error) {
 			if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 				url = "http://" + url
 			}
-			urls = append(urls, url)
+			// 规范化URL并去重
+			normalizedURL := normalizePath(url)
+			if !urlMap[normalizedURL] {
+				urlMap[normalizedURL] = true
+				urls = append(urls, url)
+			}
 		}
 	}
 	return urls, scanner.Err()
@@ -697,8 +723,16 @@ func probeURL(url string, semaphore chan struct{}) {
 // 新增：URL列表探活函数
 func probeURLList(urls []string) {
 	semaphore := make(chan struct{}, concurrent)
+	processedURLs := make(map[string]bool) // 用于扫描时去重
 
 	for _, url := range urls {
+		// 在扫描时再次去重，确保不会重复扫描
+		normalizedURL := normalizePath(url)
+		if processedURLs[normalizedURL] {
+			continue
+		}
+		processedURLs[normalizedURL] = true
+
 		wg.Add(1)
 		semaphore <- struct{}{}
 		go func(u string) {
