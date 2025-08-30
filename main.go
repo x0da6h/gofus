@@ -65,19 +65,14 @@ var (
 	customHeaders   headerFlags // 自定义请求头
 	requestData     string      // POST请求体数据
 
-	// 新增：扫描状态统计
-	scannedCount    int64     // 已扫描数量
-	errorCount      int64     // 错误计数
-	totalWords      int       // 总字典条数
-	isPaused        int32     // 是否暂停 (0: 运行中, 1: 暂停)
-	requestRate     int64     // 请求速率 (每秒请求数)
-	lastRequestTime time.Time // 上次请求时间
-	rateMutex       sync.RWMutex
-	statusMutex     sync.Mutex
+	// 扫描状态统计
+	scannedCount    int64      // 已扫描数量
+	errorCount      int64      // 错误计数
+	totalWords      int        // 总字典条数
 	outputMutex     sync.Mutex // 用于同步输出，防止进度条被刷乱
 	statusBarActive bool       // 进度条是否激活
 
-	// 新增：输出队列机制
+	// 输出队列机制
 	outputQueue chan string
 	outputDone  chan struct{}
 )
@@ -421,14 +416,6 @@ func formatIntArray(arr []int) string {
 	return "[" + strings.Join(strs, ",") + "]"
 }
 
-// 新增：格式化字符串数组为逗号分隔的字符串
-func formatStringArray(arr []string) string {
-	if len(arr) == 0 {
-		return "[]"
-	}
-	return "[" + strings.Join(arr, ",") + "]"
-}
-
 // 新增：路径规范化函数，用于去重
 func normalizePath(path string) string {
 	// 去除末尾的斜杠，使/123和/123/视为同一个路径
@@ -669,15 +656,8 @@ func hasFileExtension(path string) bool {
 	return dotIndex > 0 && dotIndex < len(filename)-1
 }
 
-// 新增：URL探活检测函数
-func probeURL(url string, semaphore chan struct{}) {
-	defer func() { <-semaphore }()
-
-	// 检查是否暂停
-	if atomic.LoadInt32(&isPaused) == 1 {
-		return
-	}
-
+// 统一的HTTP请求函数
+func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 	// 创建请求体（支持任何HTTP方法）
 	var requestBody io.Reader
 	if requestData != "" {
@@ -686,7 +666,7 @@ func probeURL(url string, semaphore chan struct{}) {
 	}
 
 	// 创建自定义HTTP请求，设置User-Agent
-	req, err := http.NewRequest(httpMethod, url, requestBody)
+	req, err := http.NewRequest(method, url, requestBody)
 	if err != nil {
 		// 增加扫描计数和错误计数
 		atomic.AddInt64(&scannedCount, 1)
@@ -729,48 +709,129 @@ func probeURL(url string, semaphore chan struct{}) {
 	// 更新扫描计数
 	atomic.AddInt64(&scannedCount, 1)
 
-	// 更新请求速率
-	rateMutex.Lock()
-	now := time.Now()
-	if !lastRequestTime.IsZero() {
-		elapsed := now.Sub(lastRequestTime).Seconds()
-		if elapsed > 0 {
-			// 计算瞬时速率
-			instantRate := int64(1 / elapsed)
-			// 使用加权平均来平滑速率变化
-			currentRate := atomic.LoadInt64(&requestRate)
-			if currentRate == 0 {
-				atomic.StoreInt64(&requestRate, instantRate)
+	// 如果是URL列表模式，直接处理结果
+	if isURLListMode {
+		// 只在未被过滤且匹配指定状态码时才输出结果
+		if !isFilteredCode(resp.StatusCode) && isMatchedCode(resp.StatusCode) {
+			// 根据状态码选择颜色输出
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				// 2xx状态码：绿色
+				printResult(fmt.Sprintf("[%s%d%s] %s", green, resp.StatusCode, reset, url))
+			} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+				// 3xx状态码：蓝色
+				printResult(fmt.Sprintf("[%s%d%s] %s", blue, resp.StatusCode, reset, url))
+			} else if resp.StatusCode >= 400 {
+				// 4xx和5xx状态码：红色
+				printResult(fmt.Sprintf("[%s%d%s] %s", red, resp.StatusCode, reset, url))
 			} else {
-				// 加权平均：新速率吅30%，旧速率吅70%
-				newRate := int64(float64(currentRate)*0.7 + float64(instantRate)*0.3)
-				atomic.StoreInt64(&requestRate, newRate)
+				// 其他状态码：默认颜色
+				printResult(fmt.Sprintf("[%d] %s", resp.StatusCode, url))
+			}
+		}
+		return
+	}
+
+	// 对于非URL列表模式（正常扫描模式），需要处理递归逻辑
+	contentLength := int(resp.ContentLength)
+	if contentLength < 0 {
+		contentLength = 0
+	}
+
+	// 先判断是否为可递归目录（不受过滤影响）
+	canDescend := false
+	if depth < maxDepth {
+		// 从URL中提取最后一部分作为word
+		parts := strings.Split(url, "/")
+		word := parts[len(parts)-1]
+		if len(parts) > 1 && parts[len(parts)-2] != "" {
+			word = parts[len(parts)-2]
+		}
+
+		// 情况1：字典词以'/'结尾，通常表示目录
+		if strings.HasSuffix(word, "/") {
+			canDescend = resp.StatusCode == http.StatusOK ||
+				resp.StatusCode == http.StatusMovedPermanently ||
+				resp.StatusCode == http.StatusFound ||
+				resp.StatusCode == http.StatusTemporaryRedirect ||
+				resp.StatusCode == http.StatusPermanentRedirect
+		} else {
+			// 情况2：未以'/'结尾，但返回了重定向（常见：/a -> /a/）
+			if resp.StatusCode == http.StatusMovedPermanently ||
+				resp.StatusCode == http.StatusFound ||
+				resp.StatusCode == http.StatusTemporaryRedirect ||
+				resp.StatusCode == http.StatusPermanentRedirect {
+				canDescend = true
+			} else if resp.StatusCode == http.StatusOK {
+				// 情况3：200状态码且没有文件后缀名，应该递归
+				// 检查是否有文件后缀名（包含点且后面有字母或数字）
+				dotIndex := strings.LastIndex(word, ".")
+				if dotIndex == -1 || dotIndex == len(word)-1 {
+					// 没有点或点在最后，认为是目录
+					canDescend = true
+				}
 			}
 		}
 	}
-	lastRequestTime = now
-	rateMutex.Unlock()
 
 	// 只在未被过滤且匹配指定状态码时才输出结果
-	if !isFilteredCode(resp.StatusCode) && isMatchedCode(resp.StatusCode) {
+	if !isFilteredCode(resp.StatusCode) && !isFilteredLength(contentLength) && isMatchedCode(resp.StatusCode) {
+		// 根据是否使用-ib选项决定输出格式
+		var outputFormat string
+		if ignoreBody {
+			// 使用-ib选项时，不显示大小信息
+			outputFormat = "[深度: %d]"
+		} else {
+			// 正常模式显示深度和大小
+			outputFormat = "[深度: %d, 大小: %d]"
+		}
+
 		// 根据状态码选择颜色输出
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			// 2xx状态码：绿色
-			printResult(fmt.Sprintf("[%s%d%s] %s", green, resp.StatusCode, reset, url))
-		} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
-			// 3xx状态码：蓝色
-			printResult(fmt.Sprintf("[%s%d%s] %s", blue, resp.StatusCode, reset, url))
-		} else if resp.StatusCode >= 400 {
-			// 4xx和5xx状态码：红色
-			printResult(fmt.Sprintf("[%s%d%s] %s", red, resp.StatusCode, reset, url))
+		if resp.StatusCode == http.StatusOK {
+			// 200状态码：绿色
+			if ignoreBody {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					green, resp.StatusCode, reset, url, depth))
+			} else {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					green, resp.StatusCode, reset, url, depth, contentLength))
+			}
+		} else if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
+			// 301和302状态码：蓝色
+			if ignoreBody {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					blue, resp.StatusCode, reset, url, depth))
+			} else {
+				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
+					blue, resp.StatusCode, reset, url, depth, contentLength))
+			}
 		} else {
 			// 其他状态码：默认颜色
-			printResult(fmt.Sprintf("[%d] %s", resp.StatusCode, url))
+			if ignoreBody {
+				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
+					resp.StatusCode, url, depth))
+			} else {
+				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
+					resp.StatusCode, url, depth, contentLength))
+			}
+		}
+	}
+
+	// 递归扫描逻辑（不受过滤影响）
+	if depth < maxDepth && canDescend {
+		nextBase := url
+		if !strings.HasSuffix(nextBase, "/") {
+			nextBase += "/"
+		}
+		// 获取字典文件内容
+		words, err := readDictionary(dictPath)
+		if err == nil {
+			semaphore := make(chan struct{}, concurrent)
+			scanPath(nextBase, words, semaphore, depth+1)
 		}
 	}
 }
 
-// 新增：URL列表探活函数
+// URL列表探活函数
 func probeURLList(urls []string) {
 	semaphore := make(chan struct{}, concurrent)
 	processedURLs := make(map[string]bool) // 用于扫描时去重
@@ -787,7 +848,8 @@ func probeURLList(urls []string) {
 		semaphore <- struct{}{}
 		go func(u string) {
 			defer wg.Done()
-			probeURL(u, semaphore)
+			defer func() { <-semaphore }()
+			sendHTTPRequest(u, httpMethod, 0, true)
 		}(url)
 	}
 
@@ -821,11 +883,6 @@ func scanPath(basePath string, words []string, semaphore chan struct{}, depth in
 }
 
 func testPath(basePath, word string, words []string, semaphore chan struct{}, depth int) {
-	// 检查是否暂停
-	if atomic.LoadInt32(&isPaused) == 1 {
-		return
-	}
-
 	fullPath := basePath + word
 
 	// 根据用户选项决定HTTP方法
@@ -835,161 +892,7 @@ func testPath(basePath, word string, words []string, semaphore chan struct{}, de
 		requestMethod = "HEAD"
 	}
 
-	// 创建请求体（支持任何HTTP方法）
-	var requestBody io.Reader
-	if requestData != "" {
-		// 在请求体末尾添加两个换行符，确保请求格式完整
-		requestBody = strings.NewReader(requestData + "\n\n")
-	}
-
-	// 创建自定义HTTP请求，设置User-Agent
-	req, err := http.NewRequest(requestMethod, fullPath, requestBody)
-	if err != nil {
-		// 增加错误计数
-		atomic.AddInt64(&errorCount, 1)
-		printResult(fmt.Sprintf("%s[请求错误] %s: %v%s", red, fullPath, err, reset))
-		return
-	}
-
-	// 设置User-Agent为gofus
-	req.Header.Set("User-Agent", "gofus/1.0")
-
-	// 应用自定义请求头
-	applyCustomHeaders(req, customHeaders)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		// 增加错误计数
-		atomic.AddInt64(&errorCount, 1)
-
-		// 使用printResult函数输出错误信息
-		if strings.Contains(err.Error(), "timeout") {
-			printResult(fmt.Sprintf("%s[超时] %s%s", red, fullPath, reset))
-		} else if strings.Contains(err.Error(), "tls") {
-			printResult(fmt.Sprintf("%s[TLS错误] %s: %v%s", red, fullPath, err, reset))
-		} else if strings.Contains(err.Error(), "connection refused") {
-			printResult(fmt.Sprintf("%s[连接拒绝] %s%s", red, fullPath, reset))
-		}
-		return
-	}
-	defer resp.Body.Close()
-
-	// 更新扫描计数
-	atomic.AddInt64(&scannedCount, 1)
-
-	// 更新请求速率 - 使用基于时间窗口的速率计算
-	rateMutex.Lock()
-	now := time.Now()
-	if !lastRequestTime.IsZero() {
-		elapsed := now.Sub(lastRequestTime).Seconds()
-		if elapsed > 0 {
-			// 计算瞬时速率
-			instantRate := int64(1 / elapsed)
-			// 使用加权平均来平滑速率变化
-			currentRate := atomic.LoadInt64(&requestRate)
-			if currentRate == 0 {
-				atomic.StoreInt64(&requestRate, instantRate)
-			} else {
-				// 加权平均：新速率占30%，旧速率占70%
-				newRate := int64(float64(currentRate)*0.7 + float64(instantRate)*0.3)
-				atomic.StoreInt64(&requestRate, newRate)
-			}
-		}
-	}
-	lastRequestTime = now
-	rateMutex.Unlock()
-
-	contentLength := int(resp.ContentLength)
-	if contentLength < 0 {
-		contentLength = 0
-	}
-
-	// 先判断是否为可递归目录（不受过滤影响）
-	canDescend := false
-	if depth < maxDepth {
-		// 情况1：字典词以'/'结尾，通常表示目录
-		if strings.HasSuffix(word, "/") {
-			canDescend = resp.StatusCode == http.StatusOK ||
-				resp.StatusCode == http.StatusMovedPermanently ||
-				resp.StatusCode == http.StatusFound ||
-				resp.StatusCode == http.StatusTemporaryRedirect ||
-				resp.StatusCode == http.StatusPermanentRedirect
-		} else {
-			// 情况2：未以'/'结尾，但返回了重定向（常见：/a -> /a/）
-			if resp.StatusCode == http.StatusMovedPermanently ||
-				resp.StatusCode == http.StatusFound ||
-				resp.StatusCode == http.StatusTemporaryRedirect ||
-				resp.StatusCode == http.StatusPermanentRedirect {
-				canDescend = true
-			} else if resp.StatusCode == http.StatusOK {
-				// 情况3：200状态码且没有文件后缀名，应该递归
-				// 检查是否有文件后缀名（包含点且后面有字母或数字）
-				lastSlashIndex := strings.LastIndex(word, "/")
-				filename := word
-				if lastSlashIndex >= 0 {
-					filename = word[lastSlashIndex+1:]
-				}
-				// 如果没有文件后缀名（没有点或点后面没有内容），则认为是目录
-				dotIndex := strings.LastIndex(filename, ".")
-				if dotIndex == -1 || dotIndex == len(filename)-1 {
-					// 没有点或点在最后，认为是目录
-					canDescend = true
-				}
-			}
-		}
-	}
-
-	// 只在未被过滤且匹配指定状态码时才输出结果
-	if !isFilteredCode(resp.StatusCode) && !isFilteredLength(contentLength) && isMatchedCode(resp.StatusCode) {
-		// 根据是否使用-ib选项决定输出格式
-		var outputFormat string
-		if ignoreBody {
-			// 使用-ib选项时，不显示大小信息
-			outputFormat = "[深度: %d]"
-		} else {
-			// 正常模式显示深度和大小
-			outputFormat = "[深度: %d, 大小: %d]"
-		}
-
-		// 根据状态码选择颜色输出
-		if resp.StatusCode == http.StatusOK {
-			// 200状态码：绿色
-			if ignoreBody {
-				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					green, resp.StatusCode, reset, fullPath, depth))
-			} else {
-				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					green, resp.StatusCode, reset, fullPath, depth, contentLength))
-			}
-		} else if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
-			// 301和302状态码：蓝色
-			if ignoreBody {
-				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					blue, resp.StatusCode, reset, fullPath, depth))
-			} else {
-				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					blue, resp.StatusCode, reset, fullPath, depth, contentLength))
-			}
-		} else {
-			// 其他状态码：默认颜色
-			if ignoreBody {
-				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
-					resp.StatusCode, fullPath, depth))
-			} else {
-				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
-					resp.StatusCode, fullPath, depth, contentLength))
-			}
-		}
-	}
-
-	// 递归扫描逻辑（不受过滤影响）
-	if depth < maxDepth && canDescend {
-		nextBase := fullPath
-		if !strings.HasSuffix(nextBase, "/") {
-			nextBase += "/"
-		}
-		scanPath(nextBase, words, semaphore, depth+1)
-	}
+	sendHTTPRequest(fullPath, requestMethod, depth, false)
 }
 
 // 新增：输出处理协程
@@ -1036,13 +939,12 @@ func printResult(message string) {
 	}
 }
 
-// 新增：设置信号处理器 (Ctrl+C直接终止)
+// 设置信号处理器 (Ctrl+C直接终止)
 func setupSignalHandler() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		atomic.StoreInt32(&isPaused, 1)
 		statusBarActive = false
 
 		// 按照项目规范清除进度条
@@ -1058,37 +960,19 @@ func setupSignalHandler() {
 	}()
 }
 
-// 新增：格式化速率 (类似ffuf的速率显示)
-func formatRate(rate int64) string {
-	if rate >= 1000 {
-		return fmt.Sprintf("%.1fk", float64(rate)/1000)
-	}
-	return fmt.Sprintf("%d", rate)
-}
-
-// 新增：固定状态行进度条更新
+// 固定状态行进度条更新
 func updateStatusBar() {
 	if !statusBarActive {
 		return
 	}
 
-	statusMutex.Lock()
-	defer statusMutex.Unlock()
-
-	// 检查是否暂停
-	if atomic.LoadInt32(&isPaused) == 1 {
-		return
-	}
-
 	scanned := atomic.LoadInt64(&scannedCount)
 	errors := atomic.LoadInt64(&errorCount)
-	rate := atomic.LoadInt64(&requestRate)
 
 	// 使用简单的\r回车符实现就地更新，移除复杂的ANSI光标控制
-	progressLine := fmt.Sprintf("\r%s%.1f%% | 速率: %s req/sec | 已扫描: %d/%d | 错误: %d%s ",
+	progressLine := fmt.Sprintf("\r%s%.1f%% | 已扫描: %d/%d | 错误: %d%s ",
 		green,
 		float64(scanned)/float64(totalWords)*100,
-		formatRate(rate),
 		scanned, totalWords,
 		errors,
 		reset)
@@ -1106,9 +990,7 @@ func startStatusBarUpdater() {
 		for {
 			select {
 			case <-ticker.C:
-				if atomic.LoadInt32(&isPaused) == 0 {
-					updateStatusBar()
-				}
+				updateStatusBar()
 			}
 		}
 	}()
