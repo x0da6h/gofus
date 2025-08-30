@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -40,6 +41,7 @@ var (
 	dictPath    string
 	targetURL   string
 	urlListPath string // URL列表文件路径
+	proxyURL    string // 代理服务器URL
 	client      *http.Client
 	visited     = struct {
 		sync.RWMutex
@@ -157,23 +159,40 @@ func printHelp() {
 		flag       string
 		defaultVal string
 		desc       string
-	}{
-		{"\t-h", "无", "\t显示当前帮助信息"},
-		{"\t-v", "无", "\t显示工具版本信息"},
-		{"\t-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
-		{"\t-U", "无", "\t目标URL列表文件 (每行一个URL，用于探活检测)"},
-		{"\t-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
-		{"\t-c", "20", "\t并发请求数 (建议20-50，防止触发目标限流)"},
-		{"\t-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
-		{"\t-fc", "无", "\t过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
-		{"\t-mc", "无", "\t匹配状态码 (逗号分隔，例：-mc 200,500 只显示200/500)"},
-		{"\t-fs", "无", "\t过滤响应体大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
-		{"\t-x", "无", "\t文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
-		{"\t-ib", "无", "\t忽略响应体内容 (只获取响应头)"},
-		{"\t-m", "GET", "\tHTTP请求方法 (支持: GET,POST,OPTIONS)"},
-		{"\t-t", "1", "\t请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
-		{"\t-H", "无", "\t自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
-		{"\t-data", "无", "\t请求体数据 (例：-data \"{user:admin}\")"},
+	}{{
+		"\t-h", "无", "\t显示当前帮助信息"},
+		{
+			"\t-v", "无", "\t显示工具版本信息"},
+		{
+			"\t-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
+		{
+			"\t-U", "无", "\t目标URL列表文件 (每行一个URL，用于探活检测)"},
+		{
+			"\t-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
+		{
+			"\t-c", "20", "\t并发请求数 (建议20-50，防止触发目标限流)"},
+		{
+			"\t-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
+		{
+			"\t-fc", "无", "\t过滤状态码 (例：-fc 404,403 不显示404/403)"},
+		{
+			"\t-mc", "无", "\t匹配状态码 (例：-mc 200,500 只显示200/500)"},
+		{
+			"\t-fs", "无", "\t过滤响应体大小 (例：-fs 800,1000 不显示大小800/1000的响应)"},
+		{
+			"\t-x", "无", "\t文件后缀扩展 (例：-x php,txt,bak)"},
+		{
+			"\t-ib", "无", "\t忽略响应体内容 (只获取响应头)"},
+		{
+			"\t-m", "GET", "\tHTTP请求方法 (支持: GET,POST,OPTIONS)"},
+		{
+			"\t-t", "1", "\t请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
+		{
+			"\t-H", "无", "\t自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
+		{
+			"\t-data", "无", "\t请求体数据 (例：-data \"{user:admin}\")"},
+		{
+			"\t-proxy", "无", "\t代理服务器 (例：-proxy socks5://127.0.0.1:7890)"},
 	}
 
 	// 打印参数列表
@@ -207,6 +226,7 @@ func init() {
 	flag.StringVar(&filterLengthStr, "fs", "", "需要过滤的响应体大小，用逗号分隔 (例如: 1000,2000)")
 	flag.BoolVar(&ignoreBody, "ib", false, "忽略响应体内容，只获取响应头")
 	flag.Var(&customHeaders, "H", "自定义请求头 (例如: -H 'Name: Value')")
+	flag.StringVar(&proxyURL, "proxy", "", "代理服务器地址 (支持HTTP、HTTPS、SOCKS4和SOCKS5，格式: http://127.0.0.1:7890 或 socks5://127.0.0.1:7890)")
 
 	flag.Usage = printHelp
 	flag.Parse()
@@ -259,20 +279,40 @@ func init() {
 
 	// 请求体数据可用于任何HTTP方法（符合FUZZ工具的设计理念）
 
+	// 创建HTTP传输对象
+	httpTransport := &http.Transport{
+		TLSHandshakeTimeout:   time.Duration(timeout/2) * time.Second, // TLS握手超时设为总超时的一半
+		ResponseHeaderTimeout: time.Duration(timeout/3) * time.Second, // 响应头超时设为总超时的三分之一
+		ExpectContinueTimeout: 5 * time.Second,                        // Expect-Continue超时
+		IdleConnTimeout:       30 * time.Second,                       // 空闲连接超时
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // 跳过TLS证书验证
+		},
+	}
+
+	// 如果设置了代理，配置代理
+	if proxyURL != "" {
+		proxyURLObj, err := url.Parse(proxyURL)
+		if err != nil {
+			fmt.Printf("%s\n[ERROR] 无效的代理URL格式: %v%s\n", red, err, reset)
+			os.Exit(1)
+		}
+		// 验证代理协议类型
+		protocol := strings.ToLower(proxyURLObj.Scheme)
+		if protocol != "http" && protocol != "https" && protocol != "socks5" && protocol != "socks4" {
+			fmt.Printf("%s\n[ERROR] 不支持的代理协议: %s，仅支持: http, https, socks4, socks5%s\n", red, protocol, reset)
+			os.Exit(1)
+		}
+		httpTransport.Proxy = http.ProxyURL(proxyURLObj)
+	}
+
+	// 创建HTTP客户端
 	client = &http.Client{
 		Timeout: time.Duration(timeout) * time.Second, // 使用用户指定的超时时间
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
-		Transport: &http.Transport{
-			TLSHandshakeTimeout:   time.Duration(timeout/2) * time.Second, // TLS握手超时设为总超时的一半
-			ResponseHeaderTimeout: time.Duration(timeout/3) * time.Second, // 响应头超时设为总超时的三分之一
-			ExpectContinueTimeout: 5 * time.Second,                        // Expect-Continue超时
-			IdleConnTimeout:       30 * time.Second,                       // 空闲连接超时
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // 跳过TLS证书验证
-			},
-		},
+		Transport: httpTransport,
 	}
 
 	// 只在非URL列表模式下处理目标URL
@@ -439,6 +479,7 @@ func main() {
 			fmt.Sprintf("#并发数量   : %d", concurrent),
 			fmt.Sprintf("#HTTP方法   : %s", httpMethod),
 			fmt.Sprintf("#超时时间   : %d秒", timeout),
+			fmt.Sprintf("#代理设置   : %s", proxyURL),
 		}
 	} else {
 		// 正常扫描模式
@@ -455,8 +496,9 @@ func main() {
 			fmt.Sprintf("#字典加载    : %d", len(words)),
 			fmt.Sprintf("#并发数量    : %d", concurrent),
 			fmt.Sprintf("#最大深度    : %d", maxDepth),
-			fmt.Sprintf("#HTTP方法    : %s", httpMethod),
-			fmt.Sprintf("#超时时间    : %d秒", timeout),
+			fmt.Sprintf("#HTTP方法   : %s", httpMethod),
+			fmt.Sprintf("#超时时间   : %d秒", timeout),
+			fmt.Sprintf("#代理设置   : %s", proxyURL),
 		}
 	}
 
