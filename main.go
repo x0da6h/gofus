@@ -163,7 +163,7 @@ func printHelp() {
 		{"\t-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
 		{"\t-U", "无", "\t目标URL列表文件 (每行一个URL，用于探活检测)"},
 		{"\t-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
-		{"\t-c", "10", "\t并发请求数 (建议10-50，防止触发目标限流)"},
+		{"\t-c", "20", "\t并发请求数 (建议20-50，防止触发目标限流)"},
 		{"\t-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
 		{"\t-fc", "无", "\t过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
 		{"\t-mc", "无", "\t匹配状态码 (逗号分隔，例：-mc 200,500 只显示200/500)"},
@@ -196,7 +196,7 @@ func init() {
 	flag.StringVar(&dictPath, "w", "", "路径字典文件")
 	flag.StringVar(&targetURL, "u", "", "目标URL地址")
 	flag.StringVar(&urlListPath, "U", "", "URL列表文件路径")
-	flag.IntVar(&concurrent, "c", 10, "并发数量")
+	flag.IntVar(&concurrent, "c", 20, "并发数量")
 	flag.IntVar(&maxDepth, "d", 1, "最大递归深度")
 	flag.StringVar(&extensionStr, "x", "", "文件后缀扩展，用逗号分隔 (例如: php,txt,bak)")
 	flag.StringVar(&httpMethod, "m", "GET", "HTTP请求方法 (支持: GET,POST,OPTIONS)")
