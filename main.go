@@ -20,7 +20,7 @@ import (
 // 版本信息
 const (
 	version   = "1.0.0"
-	buildDate = "2025-8-29"
+	buildDate = "2025-8-30"
 	author    = "x0da6h"
 )
 
@@ -158,28 +158,28 @@ func printHelp() {
 		defaultVal string
 		desc       string
 	}{
-		{"-h", "无", "	显示当前帮助信息"},
-		{"-v", "无", "	显示工具版本信息"},
-		{"-u", "<必填>", "	目标URL (例：https://example.com 或 example.com)"},
-		{"-U", "无", "	目标URL列表文件 (每行一个URL，用于探活检测)"},
-		{"-w", "<必填>", "	路径字典文件 (支持#注释、自动忽略空行)"},
-		{"-c", "10", "	并发请求数 (建议10-50，防止触发目标限流)"},
-		{"-d", "1", "	最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
-		{"-fc", "无", "	过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
-		{"-mc", "无", "	匹配状态码 (逗号分隔，例：-mc 200,500 只显示200/500)"},
-		{"-fs", "无", "	过滤响应体大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
-		{"-x", "无", "	文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
-		{"-ib", "无", "	忽略响应体内容 (只获取响应头)"},
-		{"-m", "GET", "	HTTP请求方法 (支持: GET,POST,OPTIONS)"},
-		{"-t", "1", "	请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
-		{"-H", "无", "	自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
-		{"-data", "无", "	请求体数据 (例：-data \"{user:admin}\")"},
+		{"\t-h", "无", "\t显示当前帮助信息"},
+		{"\t-v", "无", "\t显示工具版本信息"},
+		{"\t-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
+		{"\t-U", "无", "\t目标URL列表文件 (每行一个URL，用于探活检测)"},
+		{"\t-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
+		{"\t-c", "10", "\t并发请求数 (建议10-50，防止触发目标限流)"},
+		{"\t-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
+		{"\t-fc", "无", "\t过滤状态码 (逗号分隔，例：-fc 404,403 不显示404/403)"},
+		{"\t-mc", "无", "\t匹配状态码 (逗号分隔，例：-mc 200,500 只显示200/500)"},
+		{"\t-fs", "无", "\t过滤响应体大小 (逗号分隔，例：-fs 1000 不显示大小1000的响应)"},
+		{"\t-x", "无", "\t文件后缀扩展 (逗号分隔，例：-x php,txt,bak)"},
+		{"\t-ib", "无", "\t忽略响应体内容 (只获取响应头)"},
+		{"\t-m", "GET", "\tHTTP请求方法 (支持: GET,POST,OPTIONS)"},
+		{"\t-t", "1", "\t请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
+		{"\t-H", "无", "\t自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
+		{"\t-data", "无", "\t请求体数据 (例：-data \"{user:admin}\")"},
 	}
 
 	// 打印参数列表
 	fmt.Println("\n选项说明:\n")
 	for _, p := range params {
-		fmt.Printf("  %-6s  默认值: %-8s  %s\n", p.flag, p.defaultVal, p.desc)
+		fmt.Printf("  %-8s  默认值: %-8s  %s\n", p.flag, p.defaultVal, p.desc)
 	}
 }
 
@@ -452,25 +452,25 @@ func main() {
 
 	// 添加可选的过滤信息
 	if len(filterLengths) > 0 {
-		configLines = append(configLines, fmt.Sprintf("#过滤大小   : %s", formatIntArray(filterLengths)))
+		configLines = append(configLines, fmt.Sprintf("#过滤大小    : %s", formatIntArray(filterLengths)))
 	}
 	if len(filterCodes) > 0 {
 		configLines = append(configLines, fmt.Sprintf("#过滤状态码  : %s", formatIntArray(filterCodes)))
 	}
 	if len(matchCodes) > 0 {
-		configLines = append(configLines, fmt.Sprintf("#匹配状态码 : %s", formatIntArray(matchCodes)))
+		configLines = append(configLines, fmt.Sprintf("#匹配状态码  : %s", formatIntArray(matchCodes)))
 	}
 	if len(extensions) > 0 && urlListPath == "" {
-		configLines = append(configLines, fmt.Sprintf("#扩展后缀   : %s", formatExtensionArray(extensions)))
+		configLines = append(configLines, fmt.Sprintf("#扩展后缀    : %s", formatExtensionArray(extensions)))
 	}
 	if ignoreBody {
-		configLines = append(configLines, "#忽略响应体 : 开启")
+		configLines = append(configLines, "#忽略响应体  : 开启")
 	}
 	if len(customHeaders) > 0 {
-		configLines = append(configLines, fmt.Sprintf("#自定义请求头 : %d个", len(customHeaders)))
+		configLines = append(configLines, fmt.Sprintf("#自定义请求头  : %d个", len(customHeaders)))
 	}
 	if requestData != "" {
-		configLines = append(configLines, "#请求体数据 : 已设置")
+		configLines = append(configLines, "#请求体数据  : 已设置")
 	}
 
 	// 打印格式化的配置框
