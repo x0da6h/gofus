@@ -745,12 +745,14 @@ func probeURLList(urls []string) {
 }
 
 func scanPath(basePath string, words []string, semaphore chan struct{}, depth int) {
+	// 规范化路径以确保去重正确工作
+	normalizedPath := normalizePath(basePath)
 	visited.Lock()
-	if visited.m[basePath] {
+	if visited.m[normalizedPath] {
 		visited.Unlock()
 		return
 	}
-	visited.m[basePath] = true
+	visited.m[normalizedPath] = true
 	visited.Unlock()
 
 	if depth > maxDepth {
