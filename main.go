@@ -479,7 +479,11 @@ func main() {
 			fmt.Sprintf("#并发数量   : %d", concurrent),
 			fmt.Sprintf("#HTTP方法   : %s", httpMethod),
 			fmt.Sprintf("#超时时间   : %d秒", timeout),
-			fmt.Sprintf("#代理设置   : %s", proxyURL),
+		}
+
+		// 只有在设置了代理时才显示代理设置行
+		if proxyURL != "" {
+			configLines = append(configLines, fmt.Sprintf("#代理设置   : %s", proxyURL))
 		}
 	} else {
 		// 正常扫描模式
@@ -496,9 +500,13 @@ func main() {
 			fmt.Sprintf("#字典加载    : %d", len(words)),
 			fmt.Sprintf("#并发数量    : %d", concurrent),
 			fmt.Sprintf("#最大深度    : %d", maxDepth),
-			fmt.Sprintf("#HTTP方法   : %s", httpMethod),
-			fmt.Sprintf("#超时时间   : %d秒", timeout),
-			fmt.Sprintf("#代理设置   : %s", proxyURL),
+			fmt.Sprintf("#HTTP方法    : %s", httpMethod),
+			fmt.Sprintf("#超时时间    : %d秒", timeout),
+		}
+
+		// 只有在设置了代理时才显示代理设置行
+		if proxyURL != "" {
+			configLines = append(configLines, fmt.Sprintf("#代理设置    : %s", proxyURL))
 		}
 	}
 
