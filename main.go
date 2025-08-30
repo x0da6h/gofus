@@ -154,40 +154,24 @@ func printHelp() {
 		flag       string
 		defaultVal string
 		desc       string
-	}{{
-		"\t-h", "无", "\t显示当前帮助信息"},
-		{
-			"\t-v", "无", "\t显示工具版本信息"},
-		{
-			"\t-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
-		{
-			"\t-U", "无", "\t目标URL列表文件 (每行一个URL，用于探活检测)"},
-		{
-			"\t-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
-		{
-			"\t-c", "20", "\t并发请求数 (建议20-50，防止触发目标限流)"},
-		{
-			"\t-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
-		{
-			"\t-fc", "无", "\t过滤状态码 (例：-fc 404,403 不显示404/403)"},
-		{
-			"\t-mc", "无", "\t匹配状态码 (例：-mc 200,500 只显示200/500)"},
-		{
-			"\t-fs", "无", "\t过滤响应体大小 (例：-fs 800,1000 不显示大小800/1000的响应)"},
-		{
-			"\t-x", "无", "\t文件后缀扩展 (例：-x php,txt,bak)"},
-		{
-			"\t-ib", "无", "\t忽略响应体内容 (只获取响应头)"},
-		{
-			"\t-m", "GET", "\tHTTP请求方法 (支持: GET,POST,OPTIONS)"},
-		{
-			"\t-t", "1", "\t请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
-		{
-			"\t-H", "无", "\t自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
-		{
-			"\t-data", "无", "\t请求体数据 (例：-data \"{user:admin}\")"},
-		{
-			"\t-proxy", "无", "\t代理服务器 (例：-proxy socks5://127.0.0.1:7890)"},
+	}{
+		{"\t-h", "无", "\t显示当前帮助信息"},
+		{"\t-v", "无", "\t显示工具版本信息"},
+		{"\t-u", "<必填>", "\t目标URL (例：https://example.com 或 example.com)"},
+		{"\t-U", "无", "\t目标URL列表文件 (每行一个URL，用于探活检测)"},
+		{"\t-w", "<必填>", "\t路径字典文件 (支持#注释、自动忽略空行)"},
+		{"\t-c", "20", "\t并发请求数 (建议20-50，防止触发目标限流)"},
+		{"\t-d", "1", "\t最大递归深度 (1: 仅根路径，3: 支持3级子路径)"},
+		{"\t-fc", "无", "\t过滤状态码 (例：-fc 404,403 不显示404/403)"},
+		{"\t-mc", "无", "\t匹配状态码 (例：-mc 200,500 只显示200/500)"},
+		{"\t-fs", "无", "\t过滤响应体大小 (例：-fs 800,1000 不显示大小800/1000的响应)"},
+		{"\t-x", "无", "\t文件后缀扩展 (例：-x php,txt,bak)"},
+		{"\t-ib", "无", "\t忽略响应体内容 (只获取响应头)"},
+		{"\t-m", "GET", "\tHTTP请求方法 (支持: GET,POST,OPTIONS)"},
+		{"\t-t", "1", "\t请求超时时间 (秒数，例：-t 5 设置5秒超时)"},
+		{"\t-H", "无", "\t自定义请求头 (例：-H \"Name: Value\" 可多次使用)"},
+		{"\t-data", "无", "\t请求体数据 (例：-data \"{user:admin}\")"},
+		{"\t-proxy", "无", "\t代理服务器 (例：-proxy socks5://127.0.0.1:7890)"},
 	}
 
 	// 打印参数列表
@@ -276,12 +260,28 @@ func init() {
 
 	// 创建HTTP传输对象
 	httpTransport := &http.Transport{
-		TLSHandshakeTimeout:   time.Duration(timeout/2) * time.Second, // TLS握手超时设为总超时的一半
-		ResponseHeaderTimeout: time.Duration(timeout/3) * time.Second, // 响应头超时设为总超时的三分之一
-		ExpectContinueTimeout: 5 * time.Second,                        // Expect-Continue超时
-		IdleConnTimeout:       30 * time.Second,                       // 空闲连接超时
+		// 优化连接池设置
+		MaxIdleConns:          100,              // 增加最大空闲连接数
+		MaxIdleConnsPerHost:   20,               // 每个主机的最大空闲连接数
+		MaxConnsPerHost:       0,                // 不限制每个主机的最大连接数
+		TLSHandshakeTimeout:   5 * time.Second,  // 增加TLS握手超时时间
+		ResponseHeaderTimeout: 10 * time.Second, // 增加响应头超时时间
+		ExpectContinueTimeout: 2 * time.Second,  // 优化Expect-Continue超时
+		IdleConnTimeout:       90 * time.Second, // 增加空闲连接超时时间
+		ForceAttemptHTTP2:     true,             // 强制尝试使用HTTP/2
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true, // 跳过TLS证书验证
+			InsecureSkipVerify: true,             // 跳过TLS证书验证
+			MinVersion:         tls.VersionTLS12, // 设置最低TLS版本
+			MaxVersion:         tls.VersionTLS13, // 设置最高TLS版本
+			CipherSuites: []uint16{ // 配置支持的密码套件
+				tls.TLS_AES_128_GCM_SHA256,
+				tls.TLS_AES_256_GCM_SHA384,
+				tls.TLS_CHACHA20_POLY1305_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+			},
+			CurvePreferences: []tls.CurveID{tls.CurveP256, tls.CurveP384}, // 曲线偏好设置
 		},
 	}
 
@@ -304,7 +304,9 @@ func init() {
 	// 创建HTTP客户端
 	client = &http.Client{
 		Timeout: time.Duration(timeout) * time.Second, // 使用用户指定的超时时间
+		// 允许最多10次重定向，但在URL列表模式下特殊处理
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// 默认不自动跟随重定向，但在URL列表模式下会特殊处理
 			return http.ErrUseLastResponse
 		},
 		Transport: httpTransport,
@@ -656,7 +658,7 @@ func hasFileExtension(path string) bool {
 	return dotIndex > 0 && dotIndex < len(filename)-1
 }
 
-// 统一的HTTP请求函数
+// 统一的HTTP请求函数，支持重试机制
 func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 	// 创建请求体（支持任何HTTP方法）
 	var requestBody io.Reader
@@ -675,35 +677,67 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 		return
 	}
 
-	// 设置User-Agent为gofus
-	req.Header.Set("User-Agent", "gofus/1.0")
+	// 优化请求头以更好地模拟浏览器
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Accept-Encoding", "gzip, deflate, br")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Upgrade-Insecure-Requests", "1")
 
 	// 应用自定义请求头
 	applyCustomHeaders(req, customHeaders)
 
-	resp, err := client.Do(req)
-	if err != nil {
-		// 增加扫描计数和错误计数
-		atomic.AddInt64(&scannedCount, 1)
-		atomic.AddInt64(&errorCount, 1)
+	// 添加简单的重试机制
+	var resp *http.Response
+	const maxRetries = 2
+	retryCount := 0
+	retryableErrors := []string{"timeout", "deadline exceeded", "TLS handshake timeout", "connection reset"}
 
-		// 显示详细的错误信息
-		if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
-			printResult(fmt.Sprintf("[%sTimeout%s] %s", red, reset, url))
-		} else if strings.Contains(err.Error(), "tls") {
-			printResult(fmt.Sprintf("[%sTLS错误%s] %s - %v", red, reset, url, err))
-		} else if strings.Contains(err.Error(), "connection refused") {
-			printResult(fmt.Sprintf("[%s连接拒绝%s] %s", red, reset, url))
-		} else if strings.Contains(err.Error(), "no such host") {
-			printResult(fmt.Sprintf("[%sDNS解析失败%s] %s", red, reset, url))
-		} else if strings.Contains(err.Error(), "network is unreachable") {
-			printResult(fmt.Sprintf("[%s网络不可达%s] %s", red, reset, url))
-		} else {
-			// 其他未知错误
-			printResult(fmt.Sprintf("[%s网络错误%s] %s - %v", red, reset, url, err))
+	for retryCount <= maxRetries {
+		resp, err = client.Do(req)
+		if err == nil {
+			break // 请求成功，退出重试循环
 		}
-		return
+
+		// 检查错误是否可重试
+		isRetryable := false
+		for _, retryErr := range retryableErrors {
+			if strings.Contains(err.Error(), retryErr) {
+				isRetryable = true
+				break
+			}
+		}
+
+		// 如果不可重试或者已经达到最大重试次数，则报告错误
+		if !isRetryable || retryCount == maxRetries {
+			// 增加扫描计数和错误计数
+			atomic.AddInt64(&scannedCount, 1)
+			atomic.AddInt64(&errorCount, 1)
+
+			// 显示详细的错误信息
+			if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
+				printResult(fmt.Sprintf("[%sTimeout%s] %s", red, reset, url))
+			} else if strings.Contains(err.Error(), "tls") {
+				printResult(fmt.Sprintf("[%sTLS错误%s] %s - %v", red, reset, url, err))
+			} else if strings.Contains(err.Error(), "connection refused") {
+				printResult(fmt.Sprintf("[%s连接拒绝%s] %s", red, reset, url))
+			} else if strings.Contains(err.Error(), "no such host") {
+				printResult(fmt.Sprintf("[%sDNS解析失败%s] %s", red, reset, url))
+			} else if strings.Contains(err.Error(), "network is unreachable") {
+				printResult(fmt.Sprintf("[%s网络不可达%s] %s", red, reset, url))
+			} else {
+				// 其他未知错误
+				printResult(fmt.Sprintf("[%s网络错误%s] %s - %v", red, reset, url, err))
+			}
+			return
+		}
+
+		// 可重试的错误，等待一段时间后重试
+		retryCount++
+		time.Sleep(time.Duration(retryCount*100) * time.Millisecond) // 指数退避
 	}
+
 	defer resp.Body.Close()
 
 	// 更新扫描计数
@@ -719,7 +753,13 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 				printResult(fmt.Sprintf("[%s%d%s] %s", green, resp.StatusCode, reset, url))
 			} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				// 3xx状态码：蓝色
-				printResult(fmt.Sprintf("[%s%d%s] %s", blue, resp.StatusCode, reset, url))
+				location := resp.Header.Get("Location")
+				if location != "" {
+					// 如果有Location头，显示重定向目标
+					printResult(fmt.Sprintf("[%s%d%s] %s -> %s", blue, resp.StatusCode, reset, url, location))
+				} else {
+					printResult(fmt.Sprintf("[%s%d%s] %s", blue, resp.StatusCode, reset, url))
+				}
 			} else if resp.StatusCode >= 400 {
 				// 4xx和5xx状态码：红色
 				printResult(fmt.Sprintf("[%s%d%s] %s", red, resp.StatusCode, reset, url))
@@ -831,26 +871,49 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 	}
 }
 
-// URL列表探活函数
+// URL列表探活函数，使用域名分组来优化并发性能
 func probeURLList(urls []string) {
 	semaphore := make(chan struct{}, concurrent)
 	processedURLs := make(map[string]bool) // 用于扫描时去重
 
-	for _, url := range urls {
-		// 在扫描时再次去重，确保不会重复扫描
-		normalizedURL := normalizePath(url)
+	// 按域名分组，避免对同一域名同时发起过多请求
+	domainGroups := make(map[string][]string)
+
+	for _, u := range urls {
+		normalizedURL := normalizePath(u)
 		if processedURLs[normalizedURL] {
 			continue
 		}
 		processedURLs[normalizedURL] = true
 
-		wg.Add(1)
-		semaphore <- struct{}{}
-		go func(u string) {
-			defer wg.Done()
-			defer func() { <-semaphore }()
-			sendHTTPRequest(u, httpMethod, 0, true)
-		}(url)
+		// 提取域名
+		parsedURL, err := url.Parse(normalizedURL)
+		if err != nil {
+			// 无法解析的URL直接处理
+			wg.Add(1)
+			semaphore <- struct{}{}
+			go func(u string) {
+				defer wg.Done()
+				defer func() { <-semaphore }()
+				sendHTTPRequest(u, httpMethod, 0, true)
+			}(u)
+			continue
+		}
+		domain := parsedURL.Hostname()
+		domainGroups[domain] = append(domainGroups[domain], u)
+	}
+
+	// 为每个域名组启动goroutine，控制对同一域名的并发请求
+	for _, urlsInDomain := range domainGroups {
+		for _, url := range urlsInDomain {
+			wg.Add(1)
+			semaphore <- struct{}{}
+			go func(u string) {
+				defer wg.Done()
+				defer func() { <-semaphore }()
+				sendHTTPRequest(u, httpMethod, 0, true)
+			}(url)
+		}
 	}
 
 	wg.Wait()
