@@ -84,6 +84,7 @@ const (
 	red   = "\033[31m"
 	blue  = "\033[34m"
 	cyan  = "\033[36m"
+	redBg = "\033[41m"
 	reset = "\033[0m"
 )
 
@@ -766,10 +767,18 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 				resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			}
 
+			// 格式化响应体大小，当大小为0时使用红色背景
+			formatSize := func(size int) string {
+				if size == 0 {
+					return fmt.Sprintf("%s%d%s", redBg, size, reset)
+				}
+				return fmt.Sprintf("%d", size)
+			}
+
 			// 根据状态码选择颜色输出
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				// 2xx状态码：绿色
-				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %d]", green, resp.StatusCode, reset, targetURL, contentLength))
+				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %s]", green, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
 			} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				// 3xx状态码：蓝色
 				location := resp.Header.Get("Location")
@@ -778,7 +787,12 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 					redirectSize := 0
 					// 对于重定向，获取跳转后的响应体大小
 					redirectURL := location
-					if !strings.HasPrefix(redirectURL, "http://") && !strings.HasPrefix(redirectURL, "https://") {
+					// 处理不同类型的不完整URL
+					if strings.HasPrefix(redirectURL, "//") {
+						// 协议相对URL (//example.com/path)
+						baseURL, _ := neturl.Parse(targetURL)
+						redirectURL = baseURL.Scheme + ":" + redirectURL
+					} else if !strings.HasPrefix(redirectURL, "http://") && !strings.HasPrefix(redirectURL, "https://") {
 						// 相对URL，需要补全
 						baseURL, _ := neturl.Parse(targetURL)
 						redirectURLObj, err := baseURL.Parse(location)
@@ -813,16 +827,16 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 						}
 					}
 
-					printResult(fmt.Sprintf("[%s%d%s] %s -> %s [响应体大小: %d]", blue, resp.StatusCode, reset, targetURL, location, redirectSize))
+					printResult(fmt.Sprintf("[%s%d%s] %s -> %s [响应体大小: %s]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(redirectSize)))
 				} else {
-					printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %d]", blue, resp.StatusCode, reset, targetURL, contentLength))
+					printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %s]", blue, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
 				}
 			} else if resp.StatusCode >= 400 {
 				// 4xx和5xx状态码：红色
-				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %d]", red, resp.StatusCode, reset, targetURL, contentLength))
+				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %s]", red, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
 			} else {
 				// 其他状态码：默认颜色
-				printResult(fmt.Sprintf("[%d] %s [响应体大小: %d]", resp.StatusCode, targetURL, contentLength))
+				printResult(fmt.Sprintf("[%d] %s [响应体大小: %s]", resp.StatusCode, targetURL, formatSize(contentLength)))
 			}
 		}
 		return
