@@ -645,7 +645,7 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 			}
 
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %s]", green, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
+				printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s]", green, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
 			} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				location := resp.Header.Get("Location")
 				if location != "" {
@@ -686,14 +686,14 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 						}
 					}
 
-					printResult(fmt.Sprintf("[%s%d%s] %s -> %s [响应体大小: %s]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(redirectSize)))
+					printResult(fmt.Sprintf("[%s%d%s] %s -> %s \t[大小: %s]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(redirectSize)))
 				} else {
-					printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %s]", blue, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
+					printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s]", blue, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
 				}
 			} else if resp.StatusCode >= 400 {
-				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %s]", red, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
+				printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s]", red, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
 			} else {
-				printResult(fmt.Sprintf("[%d] %s [响应体大小: %s]", resp.StatusCode, targetURL, formatSize(contentLength)))
+				printResult(fmt.Sprintf("[%d] %s \t[大小: %s]", resp.StatusCode, targetURL, formatSize(contentLength)))
 			}
 		}
 		return
