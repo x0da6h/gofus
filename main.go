@@ -2,12 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	neturl "net/url"
 	"os"
 	"os/signal"
@@ -291,7 +291,7 @@ func init() {
 
 	// 如果设置了代理，配置代理
 	if proxyURL != "" {
-		proxyURLObj, err := url.Parse(proxyURL)
+		proxyURLObj, err := neturl.Parse(proxyURL)
 		if err != nil {
 			fmt.Printf("%s\n[ERROR] 无效的代理URL格式: %v%s\n", red, err, reset)
 			os.Exit(1)
@@ -580,7 +580,7 @@ func main() {
 		fmt.Printf("%s[+] 探活完成! 总计扫描: %d 个URL，成功: %d 个，错误: %d 个%s\n",
 			green, totalScanned, totalSuccess, totalErrors, reset)
 	} else {
-		fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d 个%s\n",
+		fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d 个%s\n\n",
 			green, atomic.LoadInt64(&scannedCount), atomic.LoadInt64(&errorCount), reset)
 	}
 }
@@ -752,9 +752,18 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 		// 只在未被过滤且匹配指定状态码时才输出结果
 		if !isFilteredCode(resp.StatusCode) && isMatchedCode(resp.StatusCode) {
 			// 获取响应体大小
+			// 先尝试使用Content-Length
 			contentLength := int(resp.ContentLength)
 			if contentLength < 0 {
-				contentLength = 0
+				// 如果Content-Length不可用，实际读取响应体计算大小
+				bodyBytes, err := io.ReadAll(resp.Body)
+				if err == nil {
+					contentLength = len(bodyBytes)
+				} else {
+					contentLength = 0
+				}
+				// 重新包装响应体以便后续处理
+				resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 			}
 
 			// 根据状态码选择颜色输出
@@ -771,7 +780,7 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 					redirectURL := location
 					if !strings.HasPrefix(redirectURL, "http://") && !strings.HasPrefix(redirectURL, "https://") {
 						// 相对URL，需要补全
-						baseURL, _ := url.Parse(targetURL)
+						baseURL, _ := neturl.Parse(targetURL)
 						redirectURLObj, err := baseURL.Parse(location)
 						if err == nil {
 							redirectURL = redirectURLObj.String()
@@ -786,7 +795,19 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 						if err == nil {
 							redirectSize = int(redirectResp.ContentLength)
 							if redirectSize < 0 {
-								redirectSize = 0
+								// 如果Content-Length不可用，使用GET请求实际读取响应体
+								getReq, err := http.NewRequest("GET", redirectURL, nil)
+								if err == nil {
+									getReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+									getResp, err := client.Do(getReq)
+									if err == nil {
+										bodyBytes, err := io.ReadAll(getResp.Body)
+										if err == nil {
+											redirectSize = len(bodyBytes)
+										}
+										getResp.Body.Close()
+									}
+								}
 							}
 							redirectResp.Body.Close()
 						}
