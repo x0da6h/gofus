@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -262,11 +263,11 @@ func init() {
 	// 创建HTTP传输对象
 	httpTransport := &http.Transport{
 		// 优化连接池设置
-		MaxIdleConns:          100,              // 增加最大空闲连接数
-		MaxIdleConnsPerHost:   20,               // 每个主机的最大空闲连接数
-		MaxConnsPerHost:       0,                // 不限制每个主机的最大连接数
-		TLSHandshakeTimeout:   3 * time.Second,  // 降低TLS握手超时时间(从5秒到3秒)以加快连接速度
-		ResponseHeaderTimeout: 5 * time.Second,  // 降低响应头超时时间(从10秒到5秒)以加快结果返回
+		MaxIdleConns:          100,             // 增加最大空闲连接数
+		MaxIdleConnsPerHost:   20,              // 每个主机的最大空闲连接数
+		MaxConnsPerHost:       0,               // 不限制每个主机的最大连接数
+		TLSHandshakeTimeout:   3 * time.Second, // 降低TLS握手超时时间(从5秒到3秒)以加快连接速度
+		ResponseHeaderTimeout: 5 * time.Second, // 降低响应头超时时间(从10秒到5秒)以加快结果返回
 		// HTTP客户端在发送带有Expect: 100-continue头的请求时，等待服务器响应的最长时间为2秒
 		// 这个机制用于在发送大请求体前先询问服务器是否愿意接受请求，避免浪费带宽
 		ExpectContinueTimeout: 1 * time.Second,  // 降低Expect-Continue超时(从2秒到1秒)以加快请求处理
@@ -662,7 +663,7 @@ func hasFileExtension(path string) bool {
 }
 
 // 统一的HTTP请求函数，支持重试机制
-func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
+func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode bool) {
 	// 创建请求体（支持任何HTTP方法）
 	var requestBody io.Reader
 	if requestData != "" {
@@ -671,12 +672,12 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 	}
 
 	// 创建自定义HTTP请求，设置User-Agent
-	req, err := http.NewRequest(method, url, requestBody)
+	req, err := http.NewRequest(method, targetURL, requestBody)
 	if err != nil {
 		// 增加扫描计数和错误计数
 		atomic.AddInt64(&scannedCount, 1)
 		atomic.AddInt64(&errorCount, 1)
-		printResult(fmt.Sprintf("%s[请求错误] %s: %v%s", red, url, err, reset))
+		printResult(fmt.Sprintf("%s[请求错误] %s: %v%s", red, targetURL, err, reset))
 		return
 	}
 
@@ -720,18 +721,18 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 
 			// 显示详细的错误信息
 			if strings.Contains(err.Error(), "timeout") || strings.Contains(err.Error(), "deadline exceeded") {
-				printResult(fmt.Sprintf("[%sTimeout%s] %s", red, reset, url))
+				printResult(fmt.Sprintf("[%sTimeout%s] %s", red, reset, targetURL))
 			} else if strings.Contains(err.Error(), "tls") {
-				printResult(fmt.Sprintf("[%sTLS错误%s] %s - %v", red, reset, url, err))
+				printResult(fmt.Sprintf("[%sTLS错误%s] %s - %v", red, reset, targetURL, err))
 			} else if strings.Contains(err.Error(), "connection refused") {
-				printResult(fmt.Sprintf("[%s连接拒绝%s] %s", red, reset, url))
+				printResult(fmt.Sprintf("[%s连接拒绝%s] %s", red, reset, targetURL))
 			} else if strings.Contains(err.Error(), "no such host") {
-				printResult(fmt.Sprintf("[%sDNS解析失败%s] %s", red, reset, url))
+				printResult(fmt.Sprintf("[%sDNS解析失败%s] %s", red, reset, targetURL))
 			} else if strings.Contains(err.Error(), "network is unreachable") {
-				printResult(fmt.Sprintf("[%s网络不可达%s] %s", red, reset, url))
+				printResult(fmt.Sprintf("[%s网络不可达%s] %s", red, reset, targetURL))
 			} else {
 				// 其他未知错误
-				printResult(fmt.Sprintf("[%s网络错误%s] %s - %v", red, reset, url, err))
+				printResult(fmt.Sprintf("[%s网络错误%s] %s - %v", red, reset, targetURL, err))
 			}
 			return
 		}
@@ -750,25 +751,57 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 	if isURLListMode {
 		// 只在未被过滤且匹配指定状态码时才输出结果
 		if !isFilteredCode(resp.StatusCode) && isMatchedCode(resp.StatusCode) {
+			// 获取响应体大小
+			contentLength := int(resp.ContentLength)
+			if contentLength < 0 {
+				contentLength = 0
+			}
+
 			// 根据状态码选择颜色输出
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				// 2xx状态码：绿色
-				printResult(fmt.Sprintf("[%s%d%s] %s", green, resp.StatusCode, reset, url))
+				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %d]", green, resp.StatusCode, reset, targetURL, contentLength))
 			} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				// 3xx状态码：蓝色
 				location := resp.Header.Get("Location")
 				if location != "" {
-					// 如果有Location头，显示重定向目标
-					printResult(fmt.Sprintf("[%s%d%s] %s -> %s", blue, resp.StatusCode, reset, url, location))
+					// 如果有Location头，显示重定向目标和跳转后的响应体大小
+					redirectSize := 0
+					// 对于重定向，获取跳转后的响应体大小
+					redirectURL := location
+					if !strings.HasPrefix(redirectURL, "http://") && !strings.HasPrefix(redirectURL, "https://") {
+						// 相对URL，需要补全
+						baseURL, _ := url.Parse(targetURL)
+						redirectURLObj, err := baseURL.Parse(location)
+						if err == nil {
+							redirectURL = redirectURLObj.String()
+						}
+					}
+
+					// 发送HEAD请求获取重定向URL的响应体大小
+					redirectReq, err := http.NewRequest("HEAD", redirectURL, nil)
+					if err == nil {
+						redirectReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+						redirectResp, err := client.Do(redirectReq)
+						if err == nil {
+							redirectSize = int(redirectResp.ContentLength)
+							if redirectSize < 0 {
+								redirectSize = 0
+							}
+							redirectResp.Body.Close()
+						}
+					}
+
+					printResult(fmt.Sprintf("[%s%d%s] %s -> %s [响应体大小: %d]", blue, resp.StatusCode, reset, targetURL, location, redirectSize))
 				} else {
-					printResult(fmt.Sprintf("[%s%d%s] %s", blue, resp.StatusCode, reset, url))
+					printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %d]", blue, resp.StatusCode, reset, targetURL, contentLength))
 				}
 			} else if resp.StatusCode >= 400 {
 				// 4xx和5xx状态码：红色
-				printResult(fmt.Sprintf("[%s%d%s] %s", red, resp.StatusCode, reset, url))
+				printResult(fmt.Sprintf("[%s%d%s] %s [响应体大小: %d]", red, resp.StatusCode, reset, targetURL, contentLength))
 			} else {
 				// 其他状态码：默认颜色
-				printResult(fmt.Sprintf("[%d] %s", resp.StatusCode, url))
+				printResult(fmt.Sprintf("[%d] %s [响应体大小: %d]", resp.StatusCode, targetURL, contentLength))
 			}
 		}
 		return
@@ -784,7 +817,7 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 	canDescend := false
 	if depth < maxDepth {
 		// 从URL中提取最后一部分作为word
-		parts := strings.Split(url, "/")
+		parts := strings.Split(targetURL, "/")
 		word := parts[len(parts)-1]
 		if len(parts) > 1 && parts[len(parts)-2] != "" {
 			word = parts[len(parts)-2]
@@ -833,35 +866,35 @@ func sendHTTPRequest(url string, method string, depth int, isURLListMode bool) {
 			// 200状态码：绿色
 			if ignoreBody {
 				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					green, resp.StatusCode, reset, url, depth))
+					green, resp.StatusCode, reset, targetURL, depth))
 			} else {
 				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					green, resp.StatusCode, reset, url, depth, contentLength))
+					green, resp.StatusCode, reset, targetURL, depth, contentLength))
 			}
 		} else if resp.StatusCode == http.StatusMovedPermanently || resp.StatusCode == http.StatusFound {
 			// 301和302状态码：蓝色
 			if ignoreBody {
 				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					blue, resp.StatusCode, reset, url, depth))
+					blue, resp.StatusCode, reset, targetURL, depth))
 			} else {
 				printResult(fmt.Sprintf("[%s%d%s] %s\t"+outputFormat,
-					blue, resp.StatusCode, reset, url, depth, contentLength))
+					blue, resp.StatusCode, reset, targetURL, depth, contentLength))
 			}
 		} else {
 			// 其他状态码：默认颜色
 			if ignoreBody {
 				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
-					resp.StatusCode, url, depth))
+					resp.StatusCode, targetURL, depth))
 			} else {
 				printResult(fmt.Sprintf("[%d] %s\t"+outputFormat,
-					resp.StatusCode, url, depth, contentLength))
+					resp.StatusCode, targetURL, depth, contentLength))
 			}
 		}
 	}
 
 	// 递归扫描逻辑（不受过滤影响）
 	if depth < maxDepth && canDescend {
-		nextBase := url
+		nextBase := targetURL
 		if !strings.HasSuffix(nextBase, "/") {
 			nextBase += "/"
 		}
@@ -890,7 +923,7 @@ func probeURLList(urls []string) {
 		processedURLs[normalizedURL] = true
 
 		// 提取域名
-		parsedURL, err := url.Parse(normalizedURL)
+		parsedURL, err := neturl.Parse(normalizedURL)
 		if err != nil {
 			// 无法解析的URL直接处理
 			wg.Add(1)
@@ -908,14 +941,14 @@ func probeURLList(urls []string) {
 
 	// 为每个域名组启动goroutine，控制对同一域名的并发请求
 	for _, urlsInDomain := range domainGroups {
-		for _, url := range urlsInDomain {
+		for _, currentURL := range urlsInDomain {
 			wg.Add(1)
 			semaphore <- struct{}{}
 			go func(u string) {
 				defer wg.Done()
 				defer func() { <-semaphore }()
 				sendHTTPRequest(u, httpMethod, 0, true)
-			}(url)
+			}(currentURL)
 		}
 	}
 
