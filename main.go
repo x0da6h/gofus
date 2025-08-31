@@ -21,7 +21,7 @@ import (
 // 版本信息
 const (
 	version   = "1.0.0"
-	buildDate = "2025-8-30"
+	buildDate = "2025-8-31"
 	author    = "x0da6h"
 )
 
@@ -259,16 +259,19 @@ func init() {
 	// 请求体数据可用于任何HTTP方法（符合FUZZ工具的设计理念）
 
 	// 创建HTTP传输对象
+	// 创建HTTP传输对象
 	httpTransport := &http.Transport{
 		// 优化连接池设置
 		MaxIdleConns:          100,              // 增加最大空闲连接数
 		MaxIdleConnsPerHost:   20,               // 每个主机的最大空闲连接数
 		MaxConnsPerHost:       0,                // 不限制每个主机的最大连接数
-		TLSHandshakeTimeout:   5 * time.Second,  // 增加TLS握手超时时间
-		ResponseHeaderTimeout: 10 * time.Second, // 增加响应头超时时间
-		ExpectContinueTimeout: 2 * time.Second,  // 优化Expect-Continue超时
+		TLSHandshakeTimeout:   3 * time.Second,  // 降低TLS握手超时时间(从5秒到3秒)以加快连接速度
+		ResponseHeaderTimeout: 5 * time.Second,  // 降低响应头超时时间(从10秒到5秒)以加快结果返回
+		// HTTP客户端在发送带有Expect: 100-continue头的请求时，等待服务器响应的最长时间为2秒
+		// 这个机制用于在发送大请求体前先询问服务器是否愿意接受请求，避免浪费带宽
+		ExpectContinueTimeout: 1 * time.Second,  // 降低Expect-Continue超时(从2秒到1秒)以加快请求处理
 		IdleConnTimeout:       90 * time.Second, // 增加空闲连接超时时间
-		ForceAttemptHTTP2:     true,             // 强制尝试使用HTTP/2
+		ForceAttemptHTTP2:     false,            // 禁用HTTP/2，解决Adobe等网站的stream error问题
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,             // 跳过TLS证书验证
 			MinVersion:         tls.VersionTLS12, // 设置最低TLS版本
