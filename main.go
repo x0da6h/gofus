@@ -721,27 +721,17 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 										redirectTitle = "[标题存在但未提取]"
 									}
 								}
-							} else {
-								// 读取重定向响应体失败，使用原始响应体大小
 							}
 							getResp.Body.Close()
-						} else {
-							// 创建GET请求失败，保持默认值
 						}
 					}
-
-					// 构建重定向标题部分
 					redirectTitlePart := ""
 					if redirectTitle != "" {
 						redirectTitlePart = ", 标题: " + redirectTitle
 					}
-
-					// 确保即使重定向请求失败，也显示原始响应的大小
 					if redirectSize == 0 {
 						redirectSize = contentLength
 					}
-
-					// 优化输出格式，确保标题和大小正确显示
 					printResult(fmt.Sprintf("[%s%d%s] %s -> %s \t[大小: %s%s]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(redirectSize), redirectTitlePart))
 				} else {
 					printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s%s]", blue, resp.StatusCode, reset, targetURL, formatSize(contentLength), titlePart))
