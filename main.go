@@ -26,7 +26,7 @@ import (
 const (
 	version   = "1.0"
 	buildDate = "2025-9-1"
-	author    = "x0da6h"
+	author    = "x0da6h\n"
 )
 
 type headerFlags []string
