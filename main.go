@@ -166,6 +166,7 @@ func printHelp() {
 	for _, p := range params {
 		fmt.Printf("  %-8s  默认值: %-8s  %s\n", p.flag, p.defaultVal, p.desc)
 	}
+	fmt.Println()
 }
 
 func printVersion() {
