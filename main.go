@@ -681,9 +681,7 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 				location := resp.Header.Get("Location")
 
 				if location != "" {
-					redirectSize := 0
 					redirectURL := location
-					redirectTitle := ""
 					if strings.HasPrefix(redirectURL, "//") {
 						baseURL, _ := neturl.Parse(targetURL)
 						redirectURL = baseURL.Scheme + ":" + redirectURL
@@ -695,44 +693,23 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 						}
 					}
 
-					// 直接发送GET请求获取内容和标题，不再依赖HEAD请求
-					getReq, err := http.NewRequest("GET", redirectURL, nil)
-					if err == nil {
-						getReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-						getReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
-						getReq.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-						getReq.Header.Set("Accept-Encoding", "gzip, deflate, br")
-						getReq.Header.Set("Connection", "keep-alive")
-						getReq.Header.Set("Upgrade-Insecure-Requests", "1")
-						applyCustomHeaders(getReq, customHeaders)
-
-						getResp, err := client.Do(getReq)
-						if err == nil {
-							// 读取并重定向目标的响应体
-							redirectBody, err := readAndDecompressBody(getResp)
-							if err == nil {
-								redirectSize = len(redirectBody)
-								// 提取重定向目标的标题
-								redirectTitle = extractTitle(string(redirectBody))
-								if redirectTitle == "" && len(redirectBody) > 0 {
-									// 尝试直接从响应体的前1000个字符中查找标题
-									bodyPreview := string(redirectBody[:min(len(redirectBody), 1000)])
-									if strings.Contains(strings.ToLower(bodyPreview), "<title") {
-										redirectTitle = "[标题存在但未提取]"
-									}
-								}
-							}
-							getResp.Body.Close()
+					// 使用followRedirects函数跟踪完整的重定向链
+					finalURL, finalTitle, finalSize, err := followRedirects(redirectURL, 5) // 设置最大5次重定向
+					if err != nil {
+						// 如果跟踪重定向失败，使用原始逻辑
+						redirectTitlePart := ""
+						if title != "" {
+							redirectTitlePart = ", 标题: " + title
 						}
+						printResult(fmt.Sprintf("[%s%d%s] %s -> %s \t[大小: %s%s] [跟踪重定向失败: %v]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(contentLength), redirectTitlePart, err))
+					} else {
+						// 成功跟踪重定向链，显示最终URL、标题和大小
+						finalTitlePart := ""
+						if finalTitle != "" {
+							finalTitlePart = ", 标题: " + finalTitle
+						}
+						printResult(fmt.Sprintf("[%s%d%s] %s -> %s \t[最终大小: %s%s]", blue, resp.StatusCode, reset, targetURL, finalURL, formatSize(finalSize), finalTitlePart))
 					}
-					redirectTitlePart := ""
-					if redirectTitle != "" {
-						redirectTitlePart = ", 标题: " + redirectTitle
-					}
-					if redirectSize == 0 {
-						redirectSize = contentLength
-					}
-					printResult(fmt.Sprintf("[%s%d%s] %s -> %s \t[大小: %s%s]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(redirectSize), redirectTitlePart))
 				} else {
 					printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s%s]", blue, resp.StatusCode, reset, targetURL, formatSize(contentLength), titlePart))
 				}
@@ -855,6 +832,111 @@ func readAndDecompressBody(resp *http.Response) ([]byte, error) {
 
 	// 读取解压后的内容
 	return io.ReadAll(reader)
+}
+
+// followRedirects 跟踪完整的重定向链，返回最终URL、标题和大小
+func followRedirects(initialURL string, maxRedirects int) (string, string, int, error) {
+	currentURL := initialURL
+	redirectCount := 0
+
+	// 避免重定向循环
+	visitedRedirects := make(map[string]bool)
+
+	for redirectCount < maxRedirects {
+		// 检查是否陷入重定向循环
+		if visitedRedirects[currentURL] {
+			return currentURL, "", 0, fmt.Errorf("检测到重定向循环")
+		}
+		visitedRedirects[currentURL] = true
+
+		// 创建GET请求
+		getReq, err := http.NewRequest("GET", currentURL, nil)
+		if err != nil {
+			return currentURL, "", 0, err
+		}
+
+		// 设置请求头
+		getReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+		getReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+		getReq.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		getReq.Header.Set("Accept-Encoding", "gzip, deflate, br")
+		getReq.Header.Set("Connection", "keep-alive")
+		getReq.Header.Set("Upgrade-Insecure-Requests", "1")
+		applyCustomHeaders(getReq, customHeaders)
+
+		// 发送请求
+		getResp, err := client.Do(getReq)
+		if err != nil {
+			return currentURL, "", 0, err
+		}
+
+		// 检查是否是重定向状态码
+		if getResp.StatusCode >= 300 && getResp.StatusCode < 400 {
+			location := getResp.Header.Get("Location")
+			getResp.Body.Close()
+
+			if location == "" {
+				// 没有Location头，结束重定向
+				break
+			}
+
+			// 处理相对URL
+			nextURL := location
+			if strings.HasPrefix(nextURL, "//") {
+				baseURL, _ := neturl.Parse(currentURL)
+				nextURL = baseURL.Scheme + ":" + nextURL
+			} else if !strings.HasPrefix(nextURL, "http://") && !strings.HasPrefix(nextURL, "https://") {
+				baseURL, _ := neturl.Parse(currentURL)
+				redirectURLObj, err := baseURL.Parse(location)
+				if err == nil {
+					nextURL = redirectURLObj.String()
+				}
+			}
+
+			currentURL = nextURL
+			redirectCount++
+		} else {
+			// 非重定向状态码，读取响应体获取标题和大小
+			body, err := readAndDecompressBody(getResp)
+			getResp.Body.Close()
+
+			if err != nil {
+				return currentURL, "", 0, err
+			}
+
+			title := extractTitle(string(body))
+			size := len(body)
+
+			return currentURL, title, size, nil
+		}
+	}
+
+	// 达到最大重定向次数或遇到其他情况，返回当前状态
+	getReq, err := http.NewRequest("GET", currentURL, nil)
+	if err != nil {
+		return currentURL, "", 0, err
+	}
+
+	getReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	getReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+	applyCustomHeaders(getReq, customHeaders)
+
+	getResp, err := client.Do(getReq)
+	if err != nil {
+		return currentURL, "", 0, err
+	}
+
+	body, err := readAndDecompressBody(getResp)
+	getResp.Body.Close()
+
+	if err != nil {
+		return currentURL, "", 0, err
+	}
+
+	title := extractTitle(string(body))
+	size := len(body)
+
+	return currentURL, title, size, nil
 }
 
 func probeURLList(urls []string) {
