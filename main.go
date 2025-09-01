@@ -184,7 +184,7 @@ func init() {
 	flag.IntVar(&maxDepth, "d", 1, "最大递归深度")
 	flag.StringVar(&extensionStr, "x", "", "文件后缀扩展，用逗号分隔 (例如: php,txt,bak)")
 	flag.StringVar(&httpMethod, "m", "GET", "HTTP请求方法 (支持: GET,POST,OPTIONS)")
-	flag.IntVar(&timeout, "t", 1, "请求超时时间(秒)")
+	flag.IntVar(&timeout, "t", 5, "请求超时时间(秒)")
 	flag.StringVar(&requestData, "data", "", "请求体数据")
 	flag.StringVar(&filterCodeStr, "fc", "", "需要过滤的状态码，用逗号分隔 (例如: 404,403)")
 	flag.StringVar(&matchCodeStr, "mc", "", "需要匹配的状态码，用逗号分隔 (例如: 200,500)")
