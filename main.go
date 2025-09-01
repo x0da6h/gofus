@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"bytes"
+	"compress/gzip"
 	"crypto/tls"
 	"flag"
 	"fmt"
@@ -11,17 +11,21 @@ import (
 	neturl "net/url"
 	"os"
 	"os/signal"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	// 添加Brotli压缩支持
+	"github.com/andybalholm/brotli"
 )
 
 const (
-	version   = "1.0.0"
-	buildDate = "2025-8-31"
+	version   = "1.0"
+	buildDate = "2025-9-1"
 	author    = "x0da6h"
 )
 
@@ -494,7 +498,7 @@ func main() {
 		fmt.Printf("%s[+] 探活完成! 总计扫描: %d 个URL，成功: %d 个，错误: %d 个%s\n",
 			green, totalScanned, totalSuccess, totalErrors, reset)
 	} else {
-		fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d 个%s\n\n",
+		fmt.Printf("%s[+] 扫描完成! 总计扫描: %d 个路径，错误: %d 个%s\n",
 			green, atomic.LoadInt64(&scannedCount), atomic.LoadInt64(&errorCount), reset)
 	}
 }
@@ -522,6 +526,17 @@ func readFileLines(path string, processLine func(line string) (string, bool)) ([
 		}
 	}
 	return results, scanner.Err()
+}
+
+// 从HTML内容中提取网页标题
+func extractTitle(htmlContent string) string {
+	// 修改正则表达式以支持带有属性的title标签，并忽略大小写
+	re := regexp.MustCompile(`(?i)<title[^>]*>(.*?)</title>`)
+	matches := re.FindStringSubmatch(htmlContent)
+	if len(matches) > 1 {
+		return strings.TrimSpace(matches[1])
+	}
+	return ""
 }
 
 func readDictionary(path string) ([]string, error) {
@@ -575,18 +590,21 @@ func hasFileExtension(path string) bool {
 	return dotIndex > 0 && dotIndex < len(filename)-1
 }
 
+// 处理HTTP请求并返回响应信息
 func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode bool) {
 	var requestBody io.Reader
 	if requestData != "" {
 		requestBody = strings.NewReader(requestData + "\n\n")
 	}
 
+	// 创建HTTP请求
 	req, err := http.NewRequest(method, targetURL, requestBody)
 	if err != nil {
 		handleRequestError(targetURL, fmt.Errorf("request error: %v", err))
 		return
 	}
 
+	// 设置请求头，模拟浏览器
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
 	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
@@ -594,10 +612,13 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 	req.Header.Set("Connection", "keep-alive")
 	req.Header.Set("Upgrade-Insecure-Requests", "1")
 	applyCustomHeaders(req, customHeaders)
+
+	// 发送请求并处理重试逻辑
 	var resp *http.Response
 	const maxRetries = 2
 	retryCount := 0
 	retryableErrors := []string{"timeout", "deadline exceeded", "TLS handshake timeout", "connection reset"}
+
 	for retryCount <= maxRetries {
 		resp, err = client.Do(req)
 		if err == nil {
@@ -627,14 +648,18 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 	if isURLListMode {
 		if !isFilteredCode(resp.StatusCode) && isMatchedCode(resp.StatusCode) {
 			contentLength := int(resp.ContentLength)
-			if contentLength < 0 {
-				bodyBytes, err := io.ReadAll(resp.Body)
-				if err == nil {
-					contentLength = len(bodyBytes)
-				} else {
-					contentLength = 0
-				}
-				resp.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+			title := ""
+			var bodyBytes []byte
+			var err error
+
+			// 读取并解压响应体
+			bodyBytes, err = readAndDecompressBody(resp)
+			if err == nil {
+				contentLength = len(bodyBytes)
+				// 提取网页标题 - 放宽Content-Type检查，尝试从所有响应中提取标题
+				title = extractTitle(string(bodyBytes))
+			} else {
+				contentLength = 0
 			}
 
 			formatSize := func(size int) string {
@@ -644,13 +669,21 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 				return fmt.Sprintf("%d", size)
 			}
 
+			// 构建标题部分
+			titlePart := ""
+			if title != "" {
+				titlePart = ", 标题: " + title
+			}
+
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s]", green, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
+				printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s%s]", green, resp.StatusCode, reset, targetURL, formatSize(contentLength), titlePart))
 			} else if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 				location := resp.Header.Get("Location")
+
 				if location != "" {
 					redirectSize := 0
 					redirectURL := location
+					redirectTitle := ""
 					if strings.HasPrefix(redirectURL, "//") {
 						baseURL, _ := neturl.Parse(targetURL)
 						redirectURL = baseURL.Scheme + ":" + redirectURL
@@ -662,38 +695,61 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 						}
 					}
 
-					redirectReq, err := http.NewRequest("HEAD", redirectURL, nil)
+					// 直接发送GET请求获取内容和标题，不再依赖HEAD请求
+					getReq, err := http.NewRequest("GET", redirectURL, nil)
 					if err == nil {
-						redirectReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-						redirectResp, err := client.Do(redirectReq)
+						getReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+						getReq.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7")
+						getReq.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+						getReq.Header.Set("Accept-Encoding", "gzip, deflate, br")
+						getReq.Header.Set("Connection", "keep-alive")
+						getReq.Header.Set("Upgrade-Insecure-Requests", "1")
+						applyCustomHeaders(getReq, customHeaders)
+
+						getResp, err := client.Do(getReq)
 						if err == nil {
-							redirectSize = int(redirectResp.ContentLength)
-							if redirectSize < 0 {
-								getReq, err := http.NewRequest("GET", redirectURL, nil)
-								if err == nil {
-									getReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-									getResp, err := client.Do(getReq)
-									if err == nil {
-										bodyBytes, err := io.ReadAll(getResp.Body)
-										if err == nil {
-											redirectSize = len(bodyBytes)
-										}
-										getResp.Body.Close()
+							// 读取并重定向目标的响应体
+							redirectBody, err := readAndDecompressBody(getResp)
+							if err == nil {
+								redirectSize = len(redirectBody)
+								// 提取重定向目标的标题
+								redirectTitle = extractTitle(string(redirectBody))
+								if redirectTitle == "" && len(redirectBody) > 0 {
+									// 尝试直接从响应体的前1000个字符中查找标题
+									bodyPreview := string(redirectBody[:min(len(redirectBody), 1000)])
+									if strings.Contains(strings.ToLower(bodyPreview), "<title") {
+										redirectTitle = "[标题存在但未提取]"
 									}
 								}
+							} else {
+								// 读取重定向响应体失败，使用原始响应体大小
 							}
-							redirectResp.Body.Close()
+							getResp.Body.Close()
+						} else {
+							// 创建GET请求失败，保持默认值
 						}
 					}
 
-					printResult(fmt.Sprintf("[%s%d%s] %s -> %s \t[大小: %s]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(redirectSize)))
+					// 构建重定向标题部分
+					redirectTitlePart := ""
+					if redirectTitle != "" {
+						redirectTitlePart = ", 标题: " + redirectTitle
+					}
+
+					// 确保即使重定向请求失败，也显示原始响应的大小
+					if redirectSize == 0 {
+						redirectSize = contentLength
+					}
+
+					// 优化输出格式，确保标题和大小正确显示
+					printResult(fmt.Sprintf("[%s%d%s] %s -> %s \t[大小: %s%s]", blue, resp.StatusCode, reset, targetURL, redirectURL, formatSize(redirectSize), redirectTitlePart))
 				} else {
-					printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s]", blue, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
+					printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s%s]", blue, resp.StatusCode, reset, targetURL, formatSize(contentLength), titlePart))
 				}
 			} else if resp.StatusCode >= 400 {
-				printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s]", red, resp.StatusCode, reset, targetURL, formatSize(contentLength)))
+				printResult(fmt.Sprintf("[%s%d%s] %s \t[大小: %s%s]", red, resp.StatusCode, reset, targetURL, formatSize(contentLength), titlePart))
 			} else {
-				printResult(fmt.Sprintf("[%d] %s \t[大小: %s]", resp.StatusCode, targetURL, formatSize(contentLength)))
+				printResult(fmt.Sprintf("[%d] %s \t[大小: %s%s]", resp.StatusCode, targetURL, formatSize(contentLength), titlePart))
 			}
 		}
 		return
@@ -779,6 +835,36 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 			scanPath(nextBase, words, semaphore, depth+1)
 		}
 	}
+}
+
+// 读取并解压HTTP响应体
+type decompressedReader struct {
+	reader io.Reader
+	err    error
+}
+
+func readAndDecompressBody(resp *http.Response) ([]byte, error) {
+	// 获取Content-Encoding头
+	contentEncoding := resp.Header.Get("Content-Encoding")
+
+	// 根据Content-Encoding选择合适的读取器
+	var reader io.Reader = resp.Body
+
+	if strings.Contains(contentEncoding, "gzip") {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gzipReader.Close()
+		reader = gzipReader
+	} else if strings.Contains(contentEncoding, "br") {
+		// 使用brotli读取器
+		brReader := brotli.NewReader(resp.Body)
+		reader = brReader
+	}
+
+	// 读取解压后的内容
+	return io.ReadAll(reader)
 }
 
 func probeURLList(urls []string) {
@@ -952,4 +1038,12 @@ func handleRequestError(targetURL string, err error) {
 		errorMsg = fmt.Sprintf("[%s网络错误%s] %s - %v", red, reset, targetURL, err)
 	}
 	printResult(errorMsg)
+}
+
+// min 返回两个整数中的较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
