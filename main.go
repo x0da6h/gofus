@@ -40,16 +40,14 @@ func (h *headerFlags) Set(value string) error {
 	return nil
 }
 
+// 全局变量定义
 var (
-	dictPath    string
-	targetURL   string
-	urlListPath string // URL列表文件路径
-	proxyURL    string // 代理服务器URL
-	client      *http.Client
-	visited     = struct {
-		sync.RWMutex
-		m map[string]bool
-	}{m: make(map[string]bool)}
+	dictPath        string
+	targetURL       string
+	urlListPath     string // URL列表文件路径
+	proxyURL        string // 代理服务器URL
+	client          *http.Client
+	visited         sync.Map // 替换为sync.Map
 	wg              sync.WaitGroup
 	concurrent      int
 	maxDepth        int   // 最大递归深度
@@ -237,12 +235,12 @@ func init() {
 	}
 
 	httpTransport := &http.Transport{
-		MaxIdleConns:          100,              // 增加最大空闲连接数
-		MaxIdleConnsPerHost:   20,               // 每个主机的最大空闲连接数
+		MaxIdleConns:          50,               // 从100降低到50
+		MaxIdleConnsPerHost:   10,               // 从20降低到10
 		MaxConnsPerHost:       0,                // 不限制每个主机的最大连接数
-		TLSHandshakeTimeout:   3 * time.Second,  // 降低TLS握手超时时间(从5秒到3秒)以加快连接速度
-		ResponseHeaderTimeout: 5 * time.Second,  // 降低响应头超时时间(从10秒到5秒)以加快结果返回
-		ExpectContinueTimeout: 1 * time.Second,  // 降低Expect-Continue超时(从2秒到1秒)以加快请求处理
+		TLSHandshakeTimeout:   3 * time.Second,  // 降低TLS握手超时时间以加快连接速度
+		ResponseHeaderTimeout: 5 * time.Second,  // 降低响应头超时时间以加快结果返回
+		ExpectContinueTimeout: 1 * time.Second,  // 降低Expect-Continue超时以加快请求处理
 		IdleConnTimeout:       90 * time.Second, // 增加空闲连接超时时间
 		ForceAttemptHTTP2:     false,            // 禁用HTTP/2，解决Adobe等网站的stream error问题
 		TLSClientConfig: &tls.Config{
@@ -806,11 +804,6 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 }
 
 // 读取并解压HTTP响应体
-type decompressedReader struct {
-	reader io.Reader
-	err    error
-}
-
 func readAndDecompressBody(resp *http.Response) ([]byte, error) {
 	// 获取Content-Encoding头
 	contentEncoding := resp.Header.Get("Content-Encoding")
@@ -982,13 +975,10 @@ func probeURLList(urls []string) {
 
 func scanPath(basePath string, words []string, semaphore chan struct{}, depth int) {
 	normalizedPath := normalizePath(basePath)
-	visited.Lock()
-	if visited.m[normalizedPath] {
-		visited.Unlock()
+	// 使用sync.Map的LoadOrStore方法检查并标记为已访问
+	if _, loaded := visited.LoadOrStore(normalizedPath, true); loaded {
 		return
 	}
-	visited.m[normalizedPath] = true
-	visited.Unlock()
 
 	if depth > maxDepth {
 		return
