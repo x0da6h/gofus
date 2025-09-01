@@ -18,9 +18,6 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
-
-	// 添加Brotli压缩支持
-	"github.com/andybalholm/brotli"
 )
 
 const (
@@ -818,10 +815,6 @@ func readAndDecompressBody(resp *http.Response) ([]byte, error) {
 		}
 		defer gzipReader.Close()
 		reader = gzipReader
-	} else if strings.Contains(contentEncoding, "br") {
-		// 使用brotli读取器
-		brReader := brotli.NewReader(resp.Body)
-		reader = brReader
 	}
 
 	// 读取解压后的内容

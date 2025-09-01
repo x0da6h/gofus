@@ -2,4 +2,4 @@ module gofus
 
 go 1.24
 
-require github.com/andybalholm/brotli v1.2.0 // indirect
+replace github.com/andybalholm/brotli => gitcode.net/mirrors/andybalholm/brotli.git v1.2.0
