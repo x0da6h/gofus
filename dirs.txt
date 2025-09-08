@@ -701,6 +701,7 @@ ccount
 ccp14admin
 ccs
 cd
+robots
 cdrom
 centres
 cert

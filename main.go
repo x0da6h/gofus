@@ -235,14 +235,14 @@ func init() {
 		MaxIdleConns:          50,               // 从100降低到50
 		MaxIdleConnsPerHost:   10,               // 从20降低到10
 		MaxConnsPerHost:       0,                // 不限制每个主机的最大连接数
-		TLSHandshakeTimeout:   3 * time.Second,  // 降低TLS握手超时时间以加快连接速度
+		TLSHandshakeTimeout:   10 * time.Second, // 增加TLS握手超时时间以提高稳定性
 		ResponseHeaderTimeout: 5 * time.Second,  // 降低响应头超时时间以加快结果返回
 		ExpectContinueTimeout: 1 * time.Second,  // 降低Expect-Continue超时以加快请求处理
 		IdleConnTimeout:       90 * time.Second, // 增加空闲连接超时时间
 		ForceAttemptHTTP2:     false,            // 禁用HTTP/2，解决Adobe等网站的stream error问题
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,             // 跳过TLS证书验证
-			MinVersion:         tls.VersionTLS12, // 设置最低TLS版本
+			MinVersion:         tls.VersionTLS10, // 降低最低TLS版本以提高兼容性
 			MaxVersion:         tls.VersionTLS13, // 设置最高TLS版本
 			CipherSuites: []uint16{ // 配置支持的密码套件
 				tls.TLS_AES_128_GCM_SHA256,
@@ -251,8 +251,20 @@ func init() {
 				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
 				tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+				// 增加更多兼容性套件
+				tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+				tls.TLS_RSA_WITH_AES_256_GCM_SHA384,
+				tls.TLS_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_RSA_WITH_AES_256_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA,
+				tls.TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA,
 			},
-			CurvePreferences: []tls.CurveID{tls.CurveP256, tls.CurveP384}, // 曲线偏好设置
+			CurvePreferences: []tls.CurveID{ // 增加更多曲线选项
+				tls.CurveP256,
+				tls.CurveP384,
+				tls.CurveP521,
+				tls.X25519,
+			}, // 曲线偏好设置
 		},
 	}
 
@@ -613,7 +625,7 @@ func sendHTTPRequest(targetURL string, method string, depth int, isURLListMode b
 	var resp *http.Response
 	const maxRetries = 2
 	retryCount := 0
-	retryableErrors := []string{"timeout", "deadline exceeded", "TLS handshake timeout", "connection reset"}
+	retryableErrors := []string{"timeout", "deadline exceeded", "TLS handshake timeout", "connection reset", "tls: ", "remote error: tls"}
 
 	for retryCount <= maxRetries {
 		resp, err = client.Do(req)
